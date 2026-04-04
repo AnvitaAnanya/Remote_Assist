@@ -16,10 +16,8 @@ migrate_working_dir/
 *.iws
 .idea/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+# VS Code related
+.vscode/
 
 # Flutter/Dart/Pub related
 **/doc/api/
@@ -27,9 +25,16 @@ migrate_working_dir/
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
+.packages
 .pub-cache/
 .pub/
 /build/
+*.dart.js
+*.dart.js.deps
+*.dart.js.map
+*.js_
+*.js.deps
+*.js.map
 
 # Symbolication related
 app.*.symbols
@@ -41,3 +46,58 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android build artifacts
+/android/.gradle/
+/android/app/build/
+/android/local.properties
+/android/key.properties
+*.jks
+
+# iOS build artifacts
+/ios/Pods/
+/ios/.symlinks/
+/ios/Flutter/Flutter.framework
+/ios/Flutter/Flutter.podspec
+/ios/ServiceDefinitions.json
+/ios/Runner/GeneratedPluginRegistrant.*
+
+# macOS build artifacts
+/macos/Flutter/ephemeral/
+
+# Windows build artifacts
+/windows/flutter/ephemeral/
+
+# Linux build artifacts
+/linux/flutter/ephemeral/
+
+# Web build artifacts
+/web/.dart_tool/
+
+# Firebase related (keep firebase.json and .firebaserc, ignore the rest)
+.firebase/
+
+# Generated files
+*.g.dart
+*.freezed.dart
+*.mocks.dart
+
+# Coverage
+coverage/
+
+# Temp and debug output
+analyze_output.txt
+*.tmp
+*.temp
+
+# OS-specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Metadata
+.metadata
+
+# .gitkeep files (optional - remove if you want to keep empty dirs)
+# .gitkeep
