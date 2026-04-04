@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import '../core/constants.dart';
 import '../main.dart';
-import 'elder_main_nav.dart';
-import 'caregiver_screen.dart';
 
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/firestore_service.dart';
 import '../services/auth_service.dart';
 import 'auth_wrapper.dart';
+import 'elder_main_nav.dart';
+import 'caregiver_screen.dart';
 
 class RoleSelectionScreen extends StatefulWidget {
   const RoleSelectionScreen({super.key});
@@ -19,31 +20,43 @@ class RoleSelectionScreen extends StatefulWidget {
 class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
   bool _isLoading = false;
 
-  Future<void> _selectRole(String role, Widget nextScreen) async {
+  Future<void> _selectRole(String role) async {
     if (_isLoading) return;
     final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      setState(() => _isLoading = true);
-      try {
-        await FirestoreService().createUserProfile(
-          uid: user.uid,
-          email: user.email ?? '',
-          name: user.displayName ?? 'User',
-          role: role,
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No user found. Please log in again.')),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    try {
+      await FirestoreService().createUserProfile(
+        uid: user.uid,
+        email: user.email ?? '',
+        name: user.displayName ?? 'User',
+        role: role,
+      );
+      debugPrint("RoleSelectionScreen: Role '$role' saved. Navigating directly to dashboard.");
+      if (mounted) {
+        // ✅ Navigate DIRECTLY to the correct screen — avoids a second
+        // Firestore read in AuthWrapper which might return stale/null data
+        // before the write propagates.
+        final Widget destination = role == 'elder'
+            ? const ElderMainNav()
+            : const CaregiverHomeScreen();
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => destination),
+          (route) => false,
         );
-        if (mounted) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (_) => nextScreen),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to save role: $e')),
-          );
-          setState(() => _isLoading = false);
-        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to save role: $e')),
+        );
+        setState(() => _isLoading = false);
       }
     }
   }
@@ -201,7 +214,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
                 subtitle: "Receive technical\nassistance",
                 icon: Icons.pan_tool_outlined,
                 isPrimary: true,
-                onTap: () => _selectRole('elder', const ElderMainNav()),
+                onTap: () => _selectRole('elder'),
               ),
               const SizedBox(height: 12),
 
@@ -211,7 +224,7 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
                 subtitle: "Assist a family member",
                 icon: Icons.support_agent,
                 isPrimary: false,
-                onTap: () => _selectRole('caregiver', const CaregiverHomeScreen()),
+                onTap: () => _selectRole('caregiver'),
               ),
               const SizedBox(height: 12),
 

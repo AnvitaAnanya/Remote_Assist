@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import '../core/constants.dart';
 import '../widgets/custom_text_field.dart';
 import '../widgets/primary_button.dart';
@@ -20,23 +21,52 @@ class _SignupScreenState extends State<SignupScreen> {
   bool _isLoading = false;
 
   void _handleSignup() async {
-    if (_nameController.text.isEmpty || _emailController.text.isEmpty || _passwordController.text.isEmpty) return;
+    if (_nameController.text.isEmpty ||
+        _emailController.text.isEmpty ||
+        _passwordController.text.isEmpty) return;
+
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
+    final name = _nameController.text.trim();
+
+    if (password.length < 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Password must be at least 6 characters')),
+      );
+      return;
+    }
+
     setState(() => _isLoading = true);
     try {
-      await AuthService().signUpWithEmailPassword(
-        _emailController.text.trim(),
-        _passwordController.text.trim(),
-        _nameController.text.trim(),
-      );
-      // No need to navigate manually. AuthWrapper at root handles it.
+      await AuthService().signUpWithEmailPassword(email, password, name);
+      debugPrint("SignupScreen: Signup success. Navigating to AuthWrapper.");
+      if (mounted) {
+        // ✅ MUST navigate explicitly — SignupScreen sits ON TOP of AuthWrapper
+        // in the Navigator stack (pushed via Navigator.pushReplacement from
+        // LoginScreen). The stream rebuilding AuthWrapper underneath is invisible
+        // while SignupScreen is on top. Clear the stack and go to AuthWrapper
+        // so it reads auth state fresh and routes to RoleSelectionScreen.
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const AuthWrapper()),
+          (route) => false,
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Signup failed: $e')),
+          SnackBar(content: Text('Signup failed: ${_friendlyError(e.toString())}')),
         );
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  String _friendlyError(String error) {
+    if (error.contains('email-already-in-use')) return 'This email is already registered.';
+    if (error.contains('invalid-email')) return 'Please enter a valid email address.';
+    if (error.contains('weak-password')) return 'Password is too weak. Use at least 6 characters.';
+    if (error.contains('network-request-failed')) return 'Network error. Check your connection.';
+    return error;
   }
 
   @override

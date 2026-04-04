@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import '../core/constants.dart';
 import '../widgets/custom_text_field.dart';
 import '../widgets/primary_button.dart';
@@ -19,22 +20,49 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
 
   void _handleLogin() async {
-    if (_emailController.text.isEmpty || _passwordController.text.isEmpty) return;
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
+
+    if (email.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter email and password')),
+      );
+      return;
+    }
+
     setState(() => _isLoading = true);
     try {
-      await AuthService().signInWithEmailPassword(
-        _emailController.text.trim(),
-        _passwordController.text.trim(),
-      );
-      // No need to navigate. AuthWrapper at the root will detect the state change.
+      await AuthService().signInWithEmailPassword(email, password);
+      debugPrint("LoginScreen: Login success. Navigating to AuthWrapper.");
+      if (mounted) {
+        // ✅ MUST navigate explicitly. LoginScreen/SignupScreen can be pushed
+        // ON TOP of AuthWrapper via Navigator, so the stream rebuilding
+        // AuthWrapper underneath doesn't make the new screen visible.
+        // We clear the entire stack and replace with a fresh AuthWrapper.
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => const AuthWrapper()),
+          (route) => false,
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Login failed: $e')),
+          SnackBar(content: Text(_friendlyError(e.toString()))),
         );
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  String _friendlyError(String error) {
+    if (error.contains('user-not-found')) return 'No account found with this email.';
+    if (error.contains('wrong-password') || error.contains('invalid-credential')) {
+      return 'Incorrect email or password.';
+    }
+    if (error.contains('invalid-email')) return 'Please enter a valid email address.';
+    if (error.contains('too-many-requests')) return 'Too many attempts. Try again later.';
+    if (error.contains('network-request-failed')) return 'Network error. Check your connection.';
+    return 'Login failed. Please try again.';
   }
 
   @override
