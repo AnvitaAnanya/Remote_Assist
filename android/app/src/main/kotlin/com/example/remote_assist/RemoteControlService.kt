@@ -35,6 +35,23 @@ class RemoteControlService : AccessibilityService() {
         }
 
         /**
+         * Dispatch a swipe gesture from (startX, startY) to (endX, endY)
+         * over the given duration in milliseconds.
+         * Returns true if the gesture was dispatched successfully.
+         */
+        fun injectSwipe(
+            startX: Float, startY: Float,
+            endX: Float, endY: Float,
+            durationMs: Long
+        ): Boolean {
+            val service = instance ?: run {
+                Log.w(TAG, "Service not running — cannot inject swipe")
+                return false
+            }
+            return service.performSwipe(startX, startY, endX, endY, durationMs)
+        }
+
+        /**
          * Check if the service is currently running.
          */
         fun isRunning(): Boolean = instance != null
@@ -95,6 +112,53 @@ class RemoteControlService : AccessibilityService() {
 
         if (!dispatched) {
             Log.w(TAG, "dispatchGesture returned false for ($x, $y)")
+        }
+        return dispatched
+    }
+
+    /**
+     * Performs a swipe gesture from (startX, startY) to (endX, endY)
+     * over the given duration using dispatchGesture.
+     * Available on API 24+ (Android 7+).
+     */
+    private fun performSwipe(
+        startX: Float, startY: Float,
+        endX: Float, endY: Float,
+        durationMs: Long
+    ): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            Log.w(TAG, "dispatchGesture requires API 24+")
+            return false
+        }
+
+        // Clamp duration to a sane range (50ms – 2000ms)
+        val clampedDuration = durationMs.coerceIn(50, 2000)
+
+        val path = Path()
+        path.moveTo(startX, startY)
+        path.lineTo(endX, endY)
+
+        val stroke = GestureDescription.StrokeDescription(
+            path,
+            0,               // startTime (ms) — start immediately
+            clampedDuration  // duration matches the caregiver's swipe speed
+        )
+
+        val gesture = GestureDescription.Builder()
+            .addStroke(stroke)
+            .build()
+
+        val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                Log.d(TAG, "Swipe dispatched ($startX,$startY) → ($endX,$endY) in ${clampedDuration}ms")
+            }
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                Log.w(TAG, "Swipe cancelled ($startX,$startY) → ($endX,$endY)")
+            }
+        }, null)
+
+        if (!dispatched) {
+            Log.w(TAG, "dispatchGesture returned false for swipe ($startX,$startY) → ($endX,$endY)")
         }
         return dispatched
     }

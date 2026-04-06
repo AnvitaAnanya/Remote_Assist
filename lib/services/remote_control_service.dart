@@ -42,4 +42,29 @@ class RemoteControlService {
       return false;
     }
   }
+
+  /// Injects a swipe from (normStartX, normStartY) to (normEndX, normEndY)
+  /// over [durationMs] milliseconds on the elder's screen.
+  /// All coordinates are normalized (0.0 – 1.0).
+  static Future<bool> injectSwipe(
+    double normStartX,
+    double normStartY,
+    double normEndX,
+    double normEndY,
+    int durationMs,
+  ) async {
+    try {
+      final result = await _channel.invokeMethod<bool>('injectSwipe', {
+        'startX': normStartX,
+        'startY': normStartY,
+        'endX': normEndX,
+        'endY': normEndY,
+        'duration': durationMs,
+      });
+      return result ?? false;
+    } catch (e) {
+      debugPrint('RemoteControlService: Error injecting swipe: $e');
+      return false;
+    }
+  }
 }

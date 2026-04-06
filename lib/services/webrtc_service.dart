@@ -28,6 +28,10 @@ class WebRTCService {
   /// Incoming touch event from caregiver: {"x": 0.0-1.0, "y": 0.0-1.0}
   ValueNotifier<Map<String, double>?> incomingTouch = ValueNotifier(null);
 
+  /// Incoming swipe event from caregiver:
+  /// {"startX", "startY", "endX", "endY": 0.0-1.0, "duration": ms}
+  ValueNotifier<Map<String, double>?> incomingSwipe = ValueNotifier(null);
+
   // ─── Private state ──────────────────────────────────────────────────────────
 
   RTCPeerConnection? _pc;
@@ -124,6 +128,18 @@ class WebRTCService {
               incomingTouch.value = {
                 'x': (data['x'] as num).toDouble(),
                 'y': (data['y'] as num).toDouble(),
+              };
+            }
+            break;
+          case 'swipe':
+            // Caregiver sent a swipe event → elder processes it
+            if (isRemoteControlActive.value) {
+              incomingSwipe.value = {
+                'startX': (data['startX'] as num).toDouble(),
+                'startY': (data['startY'] as num).toDouble(),
+                'endX': (data['endX'] as num).toDouble(),
+                'endY': (data['endY'] as num).toDouble(),
+                'duration': (data['duration'] as num).toDouble(),
               };
             }
             break;
@@ -476,6 +492,23 @@ class WebRTCService {
     });
   }
 
+  /// Caregiver calls this to send a swipe event to the elder.
+  void sendSwipeEvent(
+    double startX, double startY,
+    double endX, double endY,
+    int durationMs,
+  ) {
+    if (!isRemoteControlActive.value) return;
+    _sendDataChannelMessage({
+      'type': 'swipe',
+      'startX': startX,
+      'startY': startY,
+      'endX': endX,
+      'endY': endY,
+      'duration': durationMs,
+    });
+  }
+
   void _sendDataChannelMessage(Map<String, dynamic> data) {
     if (_dataChannel?.state == RTCDataChannelState.RTCDataChannelOpen) {
       _dataChannel!.send(RTCDataChannelMessage(jsonEncode(data)));
@@ -513,6 +546,7 @@ class WebRTCService {
 
     isRemoteControlActive.value = false;
     remoteControlRequested.value = false;
+    incomingSwipe.value = null;
 
     _pc?.close();
     _pc = null;

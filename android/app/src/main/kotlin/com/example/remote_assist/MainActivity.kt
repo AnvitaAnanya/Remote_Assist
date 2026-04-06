@@ -57,6 +57,41 @@ class MainActivity : FlutterActivity() {
                         ))
                     }
 
+                    "injectSwipe" -> {
+                        val normStartX = call.argument<Double>("startX") ?: run {
+                            result.error("INVALID_ARG", "Missing startX coordinate", null)
+                            return@setMethodCallHandler
+                        }
+                        val normStartY = call.argument<Double>("startY") ?: run {
+                            result.error("INVALID_ARG", "Missing startY coordinate", null)
+                            return@setMethodCallHandler
+                        }
+                        val normEndX = call.argument<Double>("endX") ?: run {
+                            result.error("INVALID_ARG", "Missing endX coordinate", null)
+                            return@setMethodCallHandler
+                        }
+                        val normEndY = call.argument<Double>("endY") ?: run {
+                            result.error("INVALID_ARG", "Missing endY coordinate", null)
+                            return@setMethodCallHandler
+                        }
+                        val durationMs = call.argument<Int>("duration") ?: 300
+
+                        // Convert normalized coordinates (0-1) to actual screen pixels
+                        val metrics = DisplayMetrics()
+                        windowManager.defaultDisplay.getRealMetrics(metrics)
+                        val screenStartX = (normStartX * metrics.widthPixels).toFloat()
+                        val screenStartY = (normStartY * metrics.heightPixels).toFloat()
+                        val screenEndX = (normEndX * metrics.widthPixels).toFloat()
+                        val screenEndY = (normEndY * metrics.heightPixels).toFloat()
+
+                        val success = RemoteControlService.injectSwipe(
+                            screenStartX, screenStartY,
+                            screenEndX, screenEndY,
+                            durationMs.toLong()
+                        )
+                        result.success(success)
+                    }
+
                     else -> result.notImplemented()
                 }
             }

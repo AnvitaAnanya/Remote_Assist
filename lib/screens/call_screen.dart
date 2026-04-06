@@ -36,6 +36,11 @@ class _CallScreenState extends State<CallScreen> {
   bool _remoteControlRequested = false;
   Timer? _controlsTimer;
 
+  // Swipe tracking state for the caregiver's pan gesture
+  Offset? _swipeStartPosition;
+  Offset? _swipeEndPosition;
+  DateTime? _swipeStartTime;
+
   @override
   void initState() {
     super.initState();
@@ -49,6 +54,7 @@ class _CallScreenState extends State<CallScreen> {
     widget.webrtcService.isRemoteControlActive.addListener(_onRemoteControlChanged);
     widget.webrtcService.remoteControlRequested.addListener(_onControlRequested);
     widget.webrtcService.incomingTouch.addListener(_onIncomingTouch);
+    widget.webrtcService.incomingSwipe.addListener(_onIncomingSwipe);
   }
 
   Future<void> _initRenderers() async {
@@ -106,6 +112,20 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
+  void _onIncomingSwipe() {
+    final swipe = widget.webrtcService.incomingSwipe.value;
+    if (swipe != null && _isElder && _isRemoteControlActive) {
+      // Inject the swipe via the Accessibility Service
+      RemoteControlService.injectSwipe(
+        swipe['startX']!,
+        swipe['startY']!,
+        swipe['endX']!,
+        swipe['endY']!,
+        swipe['duration']!.toInt(),
+      );
+    }
+  }
+
   void _showGrantControlDialog() {
     showDialog(
       context: context,
@@ -114,7 +134,7 @@ class _CallScreenState extends State<CallScreen> {
         title: const Text('Remote Control Request'),
         content: const Text(
           'The caregiver wants to control your screen.\n\n'
-          'They will be able to tap on your screen remotely.',
+          'They will be able to tap and swipe on your screen remotely.',
         ),
         actions: [
           TextButton(
@@ -267,6 +287,7 @@ class _CallScreenState extends State<CallScreen> {
     widget.webrtcService.isRemoteControlActive.removeListener(_onRemoteControlChanged);
     widget.webrtcService.remoteControlRequested.removeListener(_onControlRequested);
     widget.webrtcService.incomingTouch.removeListener(_onIncomingTouch);
+    widget.webrtcService.incomingSwipe.removeListener(_onIncomingSwipe);
     _localRenderer.dispose();
     _remoteRenderer.dispose();
     super.dispose();
@@ -447,7 +468,7 @@ class _CallScreenState extends State<CallScreen> {
                         Icon(Icons.touch_app, color: Colors.white, size: 16),
                         SizedBox(width: 8),
                         Text(
-                          'Controlling • Tap screen to interact • Tap here to stop',
+                          'Controlling • Tap or swipe to interact • Tap here to stop',
                           style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
                         ),
                       ],
@@ -472,21 +493,21 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   /// Wraps the remote video view. When caregiver has remote control active,
-  /// captures taps and sends them to the elder.
+  /// captures taps and swipes and sends them to the elder.
   Widget _buildRemoteVideoView() {
     final videoView = RTCVideoView(
       _remoteRenderer,
       objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
     );
 
-    // If caregiver and remote control is active, overlay a touch detector
+    // If caregiver and remote control is active, overlay a touch/swipe detector
     if (!_isElder && _isRemoteControlActive) {
       return LayoutBuilder(
         builder: (context, constraints) {
           return GestureDetector(
             behavior: HitTestBehavior.translucent,
-            onTapDown: (details) {
-              // Calculate normalized coordinates (0-1)
+            // ── Tap detection ─────────────────────────────────────────
+            onTapUp: (details) {
               final normX = details.localPosition.dx / constraints.maxWidth;
               final normY = details.localPosition.dy / constraints.maxHeight;
               widget.webrtcService.sendTouchEvent(
@@ -494,6 +515,47 @@ class _CallScreenState extends State<CallScreen> {
                 normY.clamp(0.0, 1.0),
               );
               debugPrint('Remote tap: ($normX, $normY)');
+            },
+            // ── Swipe detection ───────────────────────────────────────
+            onPanStart: (details) {
+              _swipeStartPosition = details.localPosition;
+              _swipeStartTime = DateTime.now();
+              _swipeEndPosition = details.localPosition;
+            },
+            onPanUpdate: (details) {
+              _swipeEndPosition = details.localPosition;
+            },
+            onPanEnd: (details) {
+              if (_swipeStartPosition != null &&
+                  _swipeEndPosition != null &&
+                  _swipeStartTime != null) {
+                final durationMs = DateTime.now()
+                    .difference(_swipeStartTime!)
+                    .inMilliseconds;
+
+                final startNormX =
+                    (_swipeStartPosition!.dx / constraints.maxWidth).clamp(0.0, 1.0);
+                final startNormY =
+                    (_swipeStartPosition!.dy / constraints.maxHeight).clamp(0.0, 1.0);
+                final endNormX =
+                    (_swipeEndPosition!.dx / constraints.maxWidth).clamp(0.0, 1.0);
+                final endNormY =
+                    (_swipeEndPosition!.dy / constraints.maxHeight).clamp(0.0, 1.0);
+
+                widget.webrtcService.sendSwipeEvent(
+                  startNormX,
+                  startNormY,
+                  endNormX,
+                  endNormY,
+                  durationMs.clamp(50, 2000),
+                );
+                debugPrint(
+                  'Remote swipe: ($startNormX,$startNormY) → ($endNormX,$endNormY) ${durationMs}ms',
+                );
+              }
+              _swipeStartPosition = null;
+              _swipeEndPosition = null;
+              _swipeStartTime = null;
             },
             child: videoView,
           );
