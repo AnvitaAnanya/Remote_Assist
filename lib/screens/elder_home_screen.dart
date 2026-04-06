@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../core/constants.dart';
 import '../services/auth_service.dart';
+import '../services/webrtc_service.dart';
+import 'call_screen.dart';
 
 class ElderHomeScreen extends StatefulWidget {
   const ElderHomeScreen({super.key});
@@ -12,19 +15,76 @@ class ElderHomeScreen extends StatefulWidget {
 
 class _ElderHomeScreenState extends State<ElderHomeScreen> {
   bool _isRequesting = false;
+  bool _isLoading = false;
+  final WebRTCService _webrtcService = WebRTCService();
+
+  Future<void> _requestHelp() async {
+    if (_isLoading) return;
+    HapticFeedback.heavyImpact();
+
+    setState(() {
+      _isRequesting = true;
+      _isLoading = true;
+    });
+
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) throw Exception('Not signed in');
+
+      final callId = await _webrtcService.startCallAsElder(user.uid);
+
+      if (mounted) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CallScreen(
+              role: 'elder',
+              callId: callId,
+              webrtcService: _webrtcService,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('ElderHomeScreen: Error starting call: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not start call: $e'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isRequesting = false;
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _webrtcService.hangUp();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("REMOTE ASSIST", style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.2)),
+        title: const Text(
+          "REMOTE ASSIST",
+          style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.2),
+        ),
         centerTitle: true,
         actions: [
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: () async {
               await AuthService().signOut();
-              // No navigation needed, AuthWrapper will handle it.
             },
           ),
         ],
@@ -36,16 +96,12 @@ class _ElderHomeScreenState extends State<ElderHomeScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: 16),
-              // Request Help Big Button
+
+              // ── Big Request Help Button ─────────────────────────────────────
               AspectRatio(
                 aspectRatio: 1.3,
                 child: GestureDetector(
-                  onTap: () {
-                    HapticFeedback.vibrate();
-                    setState(() {
-                      _isRequesting = !_isRequesting;
-                    });
-                  },
+                  onTap: _isLoading ? null : _requestHelp,
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 300),
                     decoration: BoxDecoration(
@@ -53,30 +109,47 @@ class _ElderHomeScreenState extends State<ElderHomeScreen> {
                       borderRadius: BorderRadius.circular(32),
                       boxShadow: [
                         BoxShadow(
-                          color: (_isRequesting ? Colors.orange : AppColors.primary).withOpacity(0.3),
-                          blurRadius: 20,
+                          color: (_isRequesting ? Colors.orange : AppColors.primary)
+                              .withOpacity(0.35),
+                          blurRadius: 24,
                           offset: const Offset(0, 10),
-                        )
+                        ),
                       ],
                     ),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.2),
-                            shape: BoxShape.circle,
+                        if (_isLoading)
+                          const SizedBox(
+                            width: 60,
+                            height: 60,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 3,
+                            ),
+                          )
+                        else
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.2),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              _isRequesting
+                                  ? Icons.hourglass_empty
+                                  : Icons.help_outline,
+                              color: Colors.white,
+                              size: 64,
+                            ),
                           ),
-                          child: Icon(
-                            _isRequesting ? Icons.hourglass_empty : Icons.help_outline,
-                            color: Colors.white,
-                            size: 64,
-                          ),
-                        ),
                         const SizedBox(height: 16),
                         Text(
-                          _isRequesting ? "Connecting..." : "Request Help",
+                          _isLoading
+                              ? 'Starting Camera…'
+                              : _isRequesting
+                                  ? 'Connecting…'
+                                  : 'Request Help',
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 28,
@@ -89,8 +162,8 @@ class _ElderHomeScreenState extends State<ElderHomeScreen> {
                 ),
               ),
               const SizedBox(height: 16),
-              
-              // Status Indicator
+
+              // ── Status Card ─────────────────────────────────────────────────
               Container(
                 padding: const EdgeInsets.symmetric(vertical: 24),
                 decoration: BoxDecoration(
@@ -111,30 +184,37 @@ class _ElderHomeScreenState extends State<ElderHomeScreen> {
                       children: [
                         Icon(
                           _isRequesting ? Icons.wifi_calling_3 : Icons.link_off,
-                          color: _isRequesting ? Colors.orange : AppColors.error,
+                          color:
+                              _isRequesting ? Colors.orange : AppColors.error,
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          _isRequesting ? "Waiting for Caregiver" : "Not Connected",
-                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                          _isRequesting
+                              ? 'Waiting for Caregiver'
+                              : 'Not Connected',
+                          style: const TextStyle(
+                              fontSize: 20, fontWeight: FontWeight.bold),
                         ),
                       ],
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      _isRequesting ? "Listening for acceptance" : "System is ready",
-                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 16),
+                      _isRequesting
+                          ? 'Listening for acceptance'
+                          : 'System is ready',
+                      style: const TextStyle(
+                          color: AppColors.textSecondary, fontSize: 16),
                     ),
                   ],
                 ),
               ),
               const SizedBox(height: 32),
-              
-              // Helper text
+
+              // ── Helper text ─────────────────────────────────────────────────
               Text(
-                _isRequesting 
-                    ? "Please wait while we reach out to your helper."
-                    : "Tap the green button above to\nconnect with your helper.",
+                _isRequesting
+                    ? 'Please wait while we reach out to your helper.'
+                    : 'Tap the green button above to\nconnect with your helper.',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: AppColors.textSecondary,
