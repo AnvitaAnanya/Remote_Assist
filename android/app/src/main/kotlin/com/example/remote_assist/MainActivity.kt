@@ -92,6 +92,31 @@ class MainActivity : FlutterActivity() {
                         result.success(success)
                     }
 
+                    "injectLongPress" -> {
+                        val normX = call.argument<Double>("x") ?: run {
+                            result.error("INVALID_ARG", "Missing x coordinate", null)
+                            return@setMethodCallHandler
+                        }
+                        val normY = call.argument<Double>("y") ?: run {
+                            result.error("INVALID_ARG", "Missing y coordinate", null)
+                            return@setMethodCallHandler
+                        }
+
+                        // Convert normalized coordinates (0-1) to actual screen pixels
+                        val metrics = DisplayMetrics()
+                        windowManager.defaultDisplay.getRealMetrics(metrics)
+                        val screenX = (normX * metrics.widthPixels).toFloat()
+                        val screenY = (normY * metrics.heightPixels).toFloat()
+
+                        val success = RemoteControlService.injectLongPress(screenX, screenY)
+                        result.success(success)
+                    }
+
+                    "cancelGesture" -> {
+                        val success = RemoteControlService.cancelGesture()
+                        result.success(success)
+                    }
+
                     else -> result.notImplemented()
                 }
             }

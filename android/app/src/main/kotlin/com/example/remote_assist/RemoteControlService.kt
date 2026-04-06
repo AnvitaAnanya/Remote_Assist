@@ -52,6 +52,31 @@ class RemoteControlService : AccessibilityService() {
         }
 
         /**
+         * Dispatch a long-press gesture at the given screen coordinates.
+         * Holds for up to 30 seconds — call [cancelGesture] to release early.
+         * Returns true if the gesture was dispatched successfully.
+         */
+        fun injectLongPress(x: Float, y: Float): Boolean {
+            val service = instance ?: run {
+                Log.w(TAG, "Service not running — cannot inject long press")
+                return false
+            }
+            return service.performLongPress(x, y)
+        }
+
+        /**
+         * Cancel any gesture currently in progress (used to end a long press).
+         * Dispatching a new gesture automatically cancels the ongoing one.
+         */
+        fun cancelGesture(): Boolean {
+            val service = instance ?: run {
+                Log.w(TAG, "Service not running — cannot cancel gesture")
+                return false
+            }
+            return service.performCancelGesture()
+        }
+
+        /**
          * Check if the service is currently running.
          */
         fun isRunning(): Boolean = instance != null
@@ -160,6 +185,67 @@ class RemoteControlService : AccessibilityService() {
         if (!dispatched) {
             Log.w(TAG, "dispatchGesture returned false for swipe ($startX,$startY) → ($endX,$endY)")
         }
+        return dispatched
+    }
+
+    /**
+     * Performs a long-press gesture at (x, y) screen coordinates.
+     * Holds for 30 seconds — cancelled early by performCancelGesture().
+     * Available on API 24+ (Android 7+).
+     */
+    private fun performLongPress(x: Float, y: Float): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            Log.w(TAG, "dispatchGesture requires API 24+")
+            return false
+        }
+
+        val path = Path()
+        path.moveTo(x, y)
+
+        val stroke = GestureDescription.StrokeDescription(
+            path,
+            0,      // startTime — start immediately
+            30000   // 30 seconds — effectively "hold until cancelled"
+        )
+
+        val gesture = GestureDescription.Builder()
+            .addStroke(stroke)
+            .build()
+
+        val dispatched = dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                Log.d(TAG, "Long press completed at ($x, $y)")
+            }
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                Log.d(TAG, "Long press cancelled at ($x, $y)")
+            }
+        }, null)
+
+        if (!dispatched) {
+            Log.w(TAG, "dispatchGesture returned false for long press at ($x, $y)")
+        }
+        return dispatched
+    }
+
+    /**
+     * Cancels any ongoing gesture by dispatching a minimal 1ms gesture.
+     * Android's dispatchGesture automatically cancels any in-progress gesture.
+     */
+    private fun performCancelGesture(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return false
+        }
+
+        val path = Path()
+        path.moveTo(-1f, -1f)  // off-screen so it has no visible effect
+
+        val stroke = GestureDescription.StrokeDescription(path, 0, 1)
+        val gesture = GestureDescription.Builder()
+            .addStroke(stroke)
+            .build()
+
+        val dispatched = dispatchGesture(gesture, null, null)
+        Log.d(TAG, "Cancel gesture dispatched: $dispatched")
         return dispatched
     }
 }

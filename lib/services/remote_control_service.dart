@@ -67,4 +67,30 @@ class RemoteControlService {
       return false;
     }
   }
+
+  /// Injects a long press at normalized coordinates (0.0 – 1.0).
+  /// Holds for up to 30 seconds — call [cancelGesture] to release early.
+  static Future<bool> injectLongPress(double normX, double normY) async {
+    try {
+      final result = await _channel.invokeMethod<bool>('injectLongPress', {
+        'x': normX,
+        'y': normY,
+      });
+      return result ?? false;
+    } catch (e) {
+      debugPrint('RemoteControlService: Error injecting long press: $e');
+      return false;
+    }
+  }
+
+  /// Cancels any ongoing gesture (e.g. ends a long press early).
+  static Future<bool> cancelGesture() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('cancelGesture');
+      return result ?? false;
+    } catch (e) {
+      debugPrint('RemoteControlService: Error cancelling gesture: $e');
+      return false;
+    }
+  }
 }

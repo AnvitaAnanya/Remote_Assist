@@ -32,6 +32,12 @@ class WebRTCService {
   /// {"startX", "startY", "endX", "endY": 0.0-1.0, "duration": ms}
   ValueNotifier<Map<String, double>?> incomingSwipe = ValueNotifier(null);
 
+  /// Incoming long-press start event from caregiver: {"x", "y": 0.0-1.0}
+  ValueNotifier<Map<String, double>?> incomingLongPress = ValueNotifier(null);
+
+  /// Fires when caregiver releases a long press.
+  ValueNotifier<bool> incomingLongPressEnd = ValueNotifier(false);
+
   // ─── Private state ──────────────────────────────────────────────────────────
 
   RTCPeerConnection? _pc;
@@ -141,6 +147,23 @@ class WebRTCService {
                 'endY': (data['endY'] as num).toDouble(),
                 'duration': (data['duration'] as num).toDouble(),
               };
+            }
+            break;
+          case 'longPressStart':
+            // Caregiver started a long press → elder starts the hold
+            if (isRemoteControlActive.value) {
+              incomingLongPress.value = {
+                'x': (data['x'] as num).toDouble(),
+                'y': (data['y'] as num).toDouble(),
+              };
+            }
+            break;
+          case 'longPressEnd':
+            // Caregiver released the long press → elder cancels the hold
+            if (isRemoteControlActive.value) {
+              incomingLongPressEnd.value = true;
+              // Reset so next event triggers the listener again
+              Future.microtask(() => incomingLongPressEnd.value = false);
             }
             break;
           case 'requestControl':
@@ -509,6 +532,22 @@ class WebRTCService {
     });
   }
 
+  /// Caregiver calls this when they start a long press.
+  void sendLongPressStartEvent(double normX, double normY) {
+    if (!isRemoteControlActive.value) return;
+    _sendDataChannelMessage({
+      'type': 'longPressStart',
+      'x': normX,
+      'y': normY,
+    });
+  }
+
+  /// Caregiver calls this when they release a long press.
+  void sendLongPressEndEvent() {
+    if (!isRemoteControlActive.value) return;
+    _sendDataChannelMessage({'type': 'longPressEnd'});
+  }
+
   void _sendDataChannelMessage(Map<String, dynamic> data) {
     if (_dataChannel?.state == RTCDataChannelState.RTCDataChannelOpen) {
       _dataChannel!.send(RTCDataChannelMessage(jsonEncode(data)));
@@ -547,6 +586,7 @@ class WebRTCService {
     isRemoteControlActive.value = false;
     remoteControlRequested.value = false;
     incomingSwipe.value = null;
+    incomingLongPress.value = null;
 
     _pc?.close();
     _pc = null;

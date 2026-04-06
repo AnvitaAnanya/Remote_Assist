@@ -55,6 +55,8 @@ class _CallScreenState extends State<CallScreen> {
     widget.webrtcService.remoteControlRequested.addListener(_onControlRequested);
     widget.webrtcService.incomingTouch.addListener(_onIncomingTouch);
     widget.webrtcService.incomingSwipe.addListener(_onIncomingSwipe);
+    widget.webrtcService.incomingLongPress.addListener(_onIncomingLongPress);
+    widget.webrtcService.incomingLongPressEnd.addListener(_onIncomingLongPressEnd);
   }
 
   Future<void> _initRenderers() async {
@@ -126,6 +128,23 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
+  void _onIncomingLongPress() {
+    final lp = widget.webrtcService.incomingLongPress.value;
+    if (lp != null && _isElder && _isRemoteControlActive) {
+      // Start a long press (holds for 30s, cancelled by _onIncomingLongPressEnd)
+      RemoteControlService.injectLongPress(lp['x']!, lp['y']!);
+    }
+  }
+
+  void _onIncomingLongPressEnd() {
+    if (widget.webrtcService.incomingLongPressEnd.value &&
+        _isElder &&
+        _isRemoteControlActive) {
+      // Cancel the ongoing long press gesture
+      RemoteControlService.cancelGesture();
+    }
+  }
+
   void _showGrantControlDialog() {
     showDialog(
       context: context,
@@ -134,7 +153,7 @@ class _CallScreenState extends State<CallScreen> {
         title: const Text('Remote Control Request'),
         content: const Text(
           'The caregiver wants to control your screen.\n\n'
-          'They will be able to tap and swipe on your screen remotely.',
+          'They will be able to tap, swipe, and long press on your screen remotely.',
         ),
         actions: [
           TextButton(
@@ -288,6 +307,8 @@ class _CallScreenState extends State<CallScreen> {
     widget.webrtcService.remoteControlRequested.removeListener(_onControlRequested);
     widget.webrtcService.incomingTouch.removeListener(_onIncomingTouch);
     widget.webrtcService.incomingSwipe.removeListener(_onIncomingSwipe);
+    widget.webrtcService.incomingLongPress.removeListener(_onIncomingLongPress);
+    widget.webrtcService.incomingLongPressEnd.removeListener(_onIncomingLongPressEnd);
     _localRenderer.dispose();
     _remoteRenderer.dispose();
     super.dispose();
@@ -468,7 +489,7 @@ class _CallScreenState extends State<CallScreen> {
                         Icon(Icons.touch_app, color: Colors.white, size: 16),
                         SizedBox(width: 8),
                         Text(
-                          'Controlling • Tap or swipe to interact • Tap here to stop',
+                          'Controlling • Tap, swipe or hold • Tap here to stop',
                           style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
                         ),
                       ],
@@ -515,6 +536,21 @@ class _CallScreenState extends State<CallScreen> {
                 normY.clamp(0.0, 1.0),
               );
               debugPrint('Remote tap: ($normX, $normY)');
+            },
+            // ── Long press detection ──────────────────────────────────
+            // Finger held → start hold on elder's device immediately.
+            // Finger released → cancel the ongoing hold.
+            onLongPressStart: (details) {
+              final normX =
+                  (details.localPosition.dx / constraints.maxWidth).clamp(0.0, 1.0);
+              final normY =
+                  (details.localPosition.dy / constraints.maxHeight).clamp(0.0, 1.0);
+              widget.webrtcService.sendLongPressStartEvent(normX, normY);
+              debugPrint('Remote long press START: ($normX, $normY)');
+            },
+            onLongPressEnd: (details) {
+              widget.webrtcService.sendLongPressEndEvent();
+              debugPrint('Remote long press END');
             },
             // ── Swipe detection ───────────────────────────────────────
             onPanStart: (details) {
