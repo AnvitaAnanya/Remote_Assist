@@ -24,6 +24,7 @@ class WebRTCService {
   String? _currentCallId;
   bool _isFrontCamera = true;
   MediaStream? _screenShareStream;
+  bool _isStartingScreenShare = false;
 
   static const _iceServers = {
     'iceServers': [
@@ -70,10 +71,13 @@ class WebRTCService {
       debugPrint('WebRTCService: Connection state → $state');
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
         status.value = CallStatus.connected;
-      } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
-          state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
-        status.value = CallStatus.ended;
+      } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+        // Only end on truly failed — not on transient disconnected
+        if (!_isStartingScreenShare) status.value = CallStatus.ended;
       }
+      // RTCPeerConnectionStateDisconnected is temporary (e.g. network blip,
+      // app briefly backgrounded for MediaProjection permission dialog).
+      // Do NOT end the call here — ICE will attempt to recover automatically.
     };
 
     pc.onIceConnectionState = (state) {
@@ -82,9 +86,14 @@ class WebRTCService {
       if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
           state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
         status.value = CallStatus.connected;
-      } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed ||
-          state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
-        status.value = CallStatus.ended;
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
+        // Transient state — attempt ICE restart to self-heal the connection.
+        // This often happens when the app is briefly backgrounded (e.g. screen
+        // share permission dialog). Do NOT end the call.
+        debugPrint('WebRTCService: ICE disconnected – attempting restart');
+        _pc?.restartIce();
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+        if (!_isStartingScreenShare) status.value = CallStatus.ended;
       }
     };
 
@@ -252,20 +261,26 @@ class WebRTCService {
   }
 
   Future<void> _startScreenShare() async {
+    // Guard: prevents transient ICE disconnections during the MediaProjection
+    // permission dialog (which briefly backgrounds the app) from ending the call.
+    _isStartingScreenShare = true;
     try {
-      // 1. Initialize and start a foreground service for MediaProjection
+      // On Android 10+, the OS requires a running foreground service before the
+      // MediaProjection permission result returns (app is briefly backgrounded).
+      // We use flutter_background to start one BEFORE calling getDisplayMedia().
+      // flutter_webrtc's own MediaProjectionService then takes over for the capture.
       const androidConfig = FlutterBackgroundAndroidConfig(
         notificationTitle: 'Screen Sharing',
-        notificationText: 'Remote Assist is capturing your screen',
-        notificationImportance: AndroidNotificationImportance.normal,
-        enableWifiLock: true,
+        notificationText: 'Remote Assist is sharing your screen',
+        notificationImportance: AndroidNotificationImportance.Default,
+        enableWifiLock: false,
       );
-      bool hasPermissions = await FlutterBackground.initialize(androidConfig: androidConfig);
-      if (hasPermissions) {
+      final hasPermission =
+          await FlutterBackground.initialize(androidConfig: androidConfig);
+      if (hasPermission) {
         await FlutterBackground.enableBackgroundExecution();
       }
 
-      // 2. Request the system screen recording permission dialog
       _screenShareStream = await navigator.mediaDevices.getDisplayMedia({
         'audio': false,
         'video': true,
@@ -305,16 +320,17 @@ class WebRTCService {
     } catch (e) {
       debugPrint('WebRTCService: Screen share error: $e');
       rethrow;
+    } finally {
+      _isStartingScreenShare = false;
     }
   }
 
   Future<void> _stopScreenShare() async {
     try {
-      // Disable flutter_background immediately
+      // Stop the keep-alive foreground service now that screen share is ending.
       if (FlutterBackground.isBackgroundExecutionEnabled) {
         await FlutterBackground.disableBackgroundExecution();
       }
-
       _screenShareStream?.getTracks().forEach((t) => t.stop());
       _screenShareStream?.dispose();
       _screenShareStream = null;
