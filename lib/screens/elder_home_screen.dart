@@ -44,6 +44,32 @@ class _ElderHomeScreenState extends State<ElderHomeScreen> {
             ),
           ),
         );
+
+        // Check if the call was declined rather than ended normally
+        final declineReason = _webrtcService.declineReason.value;
+        if (declineReason != null && mounted) {
+          _webrtcService.declineReason.value = null; // clear so it doesn't show again
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.cancel, color: Colors.white, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Help declined by $declineReason',
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                    ),
+                  ),
+                ],
+              ),
+              backgroundColor: const Color(0xFFB91C1C),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
       }
     } catch (e) {
       debugPrint('ElderHomeScreen: Error starting call: $e');

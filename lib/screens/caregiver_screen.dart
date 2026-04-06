@@ -79,7 +79,9 @@ class _CaregiverHomeScreenState extends State<CaregiverHomeScreen>
   }
 
   Future<void> _declineCall(String callId) async {
-    await _firestoreService.declineCall(callId);
+    final user = FirebaseAuth.instance.currentUser;
+    final name = user?.displayName ?? user?.email?.split('@').first ?? 'Caregiver';
+    await _firestoreService.declineCall(callId, name);
   }
 
   @override

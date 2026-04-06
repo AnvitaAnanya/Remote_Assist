@@ -36,7 +36,7 @@ android {
     defaultConfig {
         applicationId "com.example.remote_assist"
         minSdkVersion 23
-        targetSdkVersion 34   // ✅ ONLY here
+        targetSdkVersion 33   // ✅ ONLY here
 
         versionCode 1
         versionName "1.0"

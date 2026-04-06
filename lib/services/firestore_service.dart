@@ -89,13 +89,13 @@ class FirestoreService {
     }
   }
 
-  /// Decline a call (alias for endCall from caregiver side).
-  Future<void> declineCall(String callId) async {
+  /// Decline a call — stores the caregiver's name so the elder can display it.
+  Future<void> declineCall(String callId, String caregiverName) async {
     try {
-      await _db
-          .collection('calls')
-          .doc(callId)
-          .update({'status': 'declined'});
+      await _db.collection('calls').doc(callId).update({
+        'status': 'declined',
+        'declinedByName': caregiverName,
+      });
     } catch (e) {
       debugPrint("Firestore Error (declineCall): $e");
     }
