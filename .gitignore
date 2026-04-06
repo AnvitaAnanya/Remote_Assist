@@ -106,3 +106,6 @@ $RECYCLE.BIN/
 
 # .gitkeep files (optional - remove if you want to keep empty dirs)
 # .gitkeep
+
+# FVM Version Cache
+.fvm/
