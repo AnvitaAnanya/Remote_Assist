@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../services/webrtc_service.dart';
+import '../services/remote_control_service.dart';
 
 /// Full-screen video call UI shared by both elder (role='elder') and
 /// caregiver (role='caregiver').
@@ -31,6 +32,8 @@ class _CallScreenState extends State<CallScreen> {
   bool _showControls = true;
   bool _isSwitchingCamera = false;
   bool _isTogglingScreenShare = false;
+  bool _isRemoteControlActive = false;
+  bool _remoteControlRequested = false;
   Timer? _controlsTimer;
 
   @override
@@ -43,6 +46,9 @@ class _CallScreenState extends State<CallScreen> {
     widget.webrtcService.localStream.addListener(_onLocalStreamChanged);
     widget.webrtcService.remoteStream.addListener(_onRemoteStreamChanged);
     widget.webrtcService.isScreenSharing.addListener(_onScreenShareChanged);
+    widget.webrtcService.isRemoteControlActive.addListener(_onRemoteControlChanged);
+    widget.webrtcService.remoteControlRequested.addListener(_onControlRequested);
+    widget.webrtcService.incomingTouch.addListener(_onIncomingTouch);
   }
 
   Future<void> _initRenderers() async {
@@ -76,6 +82,126 @@ class _CallScreenState extends State<CallScreen> {
 
   void _onScreenShareChanged() {
     if (mounted) setState(() => _isScreenSharing = widget.webrtcService.isScreenSharing.value);
+  }
+
+  void _onRemoteControlChanged() {
+    if (mounted) setState(() => _isRemoteControlActive = widget.webrtcService.isRemoteControlActive.value);
+  }
+
+  void _onControlRequested() {
+    if (mounted) {
+      setState(() => _remoteControlRequested = widget.webrtcService.remoteControlRequested.value);
+      // Show grant/deny dialog on elder side
+      if (_remoteControlRequested && _isElder) {
+        _showGrantControlDialog();
+      }
+    }
+  }
+
+  void _onIncomingTouch() {
+    final touch = widget.webrtcService.incomingTouch.value;
+    if (touch != null && _isElder && _isRemoteControlActive) {
+      // Inject the tap via the Accessibility Service
+      RemoteControlService.injectTap(touch['x']!, touch['y']!);
+    }
+  }
+
+  void _showGrantControlDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remote Control Request'),
+        content: const Text(
+          'The caregiver wants to control your screen.\n\n'
+          'They will be able to tap on your screen remotely.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              widget.webrtcService.revokeRemoteControl();
+              Navigator.pop(ctx);
+            },
+            child: const Text('Deny', style: TextStyle(color: Colors.red)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2A7B62),
+            ),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              // Check if accessibility service is enabled
+              final enabled = await RemoteControlService.isAccessibilityEnabled();
+              if (!enabled && mounted) {
+                _showAccessibilitySetupDialog();
+              } else {
+                widget.webrtcService.grantRemoteControl();
+              }
+            },
+            child: const Text('Grant Access', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showAccessibilitySetupDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Enable Accessibility Service'),
+        content: const Text(
+          'To allow remote control, you need to enable the Remote Assist '
+          'accessibility service.\n\n'
+          '1. Tap "Open Settings" below\n'
+          '2. Find "Remote Assist" in the list\n'
+          '3. Turn it ON and tap Allow\n'
+          '4. Return to this app',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2A7B62),
+            ),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              await RemoteControlService.openAccessibilitySettings();
+              // When user returns, check again and grant if enabled
+              _waitForAccessibilityService();
+            },
+            child: const Text('Open Settings', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _waitForAccessibilityService() {
+    // Poll every 2 seconds to check if the user enabled the service
+    Timer.periodic(const Duration(seconds: 2), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      final enabled = await RemoteControlService.isAccessibilityEnabled();
+      if (enabled) {
+        timer.cancel();
+        widget.webrtcService.grantRemoteControl();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Remote control enabled!'),
+              backgroundColor: Color(0xFF2A7B62),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    });
   }
 
   void _startControlsTimer() {
@@ -138,6 +264,9 @@ class _CallScreenState extends State<CallScreen> {
     widget.webrtcService.localStream.removeListener(_onLocalStreamChanged);
     widget.webrtcService.remoteStream.removeListener(_onRemoteStreamChanged);
     widget.webrtcService.isScreenSharing.removeListener(_onScreenShareChanged);
+    widget.webrtcService.isRemoteControlActive.removeListener(_onRemoteControlChanged);
+    widget.webrtcService.remoteControlRequested.removeListener(_onControlRequested);
+    widget.webrtcService.incomingTouch.removeListener(_onIncomingTouch);
     _localRenderer.dispose();
     _remoteRenderer.dispose();
     super.dispose();
@@ -160,10 +289,7 @@ class _CallScreenState extends State<CallScreen> {
           children: [
             // ── Remote video (full-screen) ──────────────────────────────────
             _remoteRenderer.srcObject != null
-                ? RTCVideoView(
-                    _remoteRenderer,
-                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                  )
+                ? _buildRemoteVideoView()
                 : _buildWaitingOverlay(status),
 
             // ── Local PiP (bottom-right) ────────────────────────────────────
@@ -266,6 +392,70 @@ class _CallScreenState extends State<CallScreen> {
                 ),
               ),
 
+            // ── Remote control active banner (elder) ─────────────────────
+            if (_isRemoteControlActive && _isElder)
+              Positioned(
+                top: MediaQuery.of(context).padding.top + (_isScreenSharing ? 100 : 60),
+                left: 24,
+                right: 24,
+                child: GestureDetector(
+                  onTap: () {
+                    widget.webrtcService.revokeRemoteControl();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade800.withAlpha(230),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.touch_app, color: Colors.white, size: 16),
+                        SizedBox(width: 8),
+                        Text(
+                          'Caregiver is controlling • Tap to revoke',
+                          style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+            // ── Remote control active banner (caregiver) ─────────────────
+            if (_isRemoteControlActive && !_isElder)
+              Positioned(
+                top: MediaQuery.of(context).padding.top + 60,
+                left: 24,
+                right: 24,
+                child: GestureDetector(
+                  onTap: () {
+                    widget.webrtcService.revokeRemoteControl();
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade700.withAlpha(230),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.touch_app, color: Colors.white, size: 16),
+                        SizedBox(width: 8),
+                        Text(
+                          'Controlling • Tap screen to interact • Tap here to stop',
+                          style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
             // ── Controls overlay ────────────────────────────────────────────
             AnimatedPositioned(
               duration: const Duration(milliseconds: 300),
@@ -279,6 +469,39 @@ class _CallScreenState extends State<CallScreen> {
         ),
       ),
     );
+  }
+
+  /// Wraps the remote video view. When caregiver has remote control active,
+  /// captures taps and sends them to the elder.
+  Widget _buildRemoteVideoView() {
+    final videoView = RTCVideoView(
+      _remoteRenderer,
+      objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+    );
+
+    // If caregiver and remote control is active, overlay a touch detector
+    if (!_isElder && _isRemoteControlActive) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          return GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTapDown: (details) {
+              // Calculate normalized coordinates (0-1)
+              final normX = details.localPosition.dx / constraints.maxWidth;
+              final normY = details.localPosition.dy / constraints.maxHeight;
+              widget.webrtcService.sendTouchEvent(
+                normX.clamp(0.0, 1.0),
+                normY.clamp(0.0, 1.0),
+              );
+              debugPrint('Remote tap: ($normX, $normY)');
+            },
+            child: videoView,
+          );
+        },
+      );
+    }
+
+    return videoView;
   }
 
   Widget _buildWaitingOverlay(CallStatus status) {
@@ -330,7 +553,7 @@ class _CallScreenState extends State<CallScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           // ── Secondary row (camera flip + screen share for elder) ──────────
-          if (_isElder)
+            if (_isElder)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: Row(
@@ -352,6 +575,30 @@ class _CallScreenState extends State<CallScreen> {
                     onTap: _toggleScreenShare,
                     size: 44,
                     isLoading: _isTogglingScreenShare,
+                  ),
+                ],
+              ),
+            ),
+          // ── Caregiver secondary row (remote control button) ────────────
+          if (!_isElder && _remoteRenderer.srcObject != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _ControlButton(
+                    icon: _isRemoteControlActive ? Icons.cancel : Icons.touch_app,
+                    color: _isRemoteControlActive ? Colors.orange : Colors.white,
+                    backgroundColor: _isRemoteControlActive ? Colors.orange.shade900.withAlpha(180) : null,
+                    label: _isRemoteControlActive ? 'Stop Control' : 'Request Control',
+                    onTap: () {
+                      if (_isRemoteControlActive) {
+                        widget.webrtcService.revokeRemoteControl();
+                      } else {
+                        widget.webrtcService.requestRemoteControl();
+                      }
+                    },
+                    size: 44,
                   ),
                 ],
               ),

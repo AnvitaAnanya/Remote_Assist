@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -18,9 +19,19 @@ class WebRTCService {
   /// Whether screen share is currently active (elder only).
   ValueNotifier<bool> isScreenSharing = ValueNotifier(false);
 
+  /// Whether remote control is active.
+  ValueNotifier<bool> isRemoteControlActive = ValueNotifier(false);
+
+  /// Fires when caregiver requests control (elder sees this).
+  ValueNotifier<bool> remoteControlRequested = ValueNotifier(false);
+
+  /// Incoming touch event from caregiver: {"x": 0.0-1.0, "y": 0.0-1.0}
+  ValueNotifier<Map<String, double>?> incomingTouch = ValueNotifier(null);
+
   // ─── Private state ──────────────────────────────────────────────────────────
 
   RTCPeerConnection? _pc;
+  RTCDataChannel? _dataChannel;
   String? _currentCallId;
   bool _isFrontCamera = true;
   MediaStream? _screenShareStream;
@@ -72,24 +83,16 @@ class WebRTCService {
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
         status.value = CallStatus.connected;
       } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
-        // Only end on truly failed — not on transient disconnected
         if (!_isStartingScreenShare) status.value = CallStatus.ended;
       }
-      // RTCPeerConnectionStateDisconnected is temporary (e.g. network blip,
-      // app briefly backgrounded for MediaProjection permission dialog).
-      // Do NOT end the call here — ICE will attempt to recover automatically.
     };
 
     pc.onIceConnectionState = (state) {
       debugPrint('WebRTCService: ICE Connection state → $state');
-      // Some platforms fire ICE connection state reliably instead of PC connection state.
       if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
           state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
         status.value = CallStatus.connected;
       } else if (state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
-        // Transient state — attempt ICE restart to self-heal the connection.
-        // This often happens when the app is briefly backgrounded (e.g. screen
-        // share permission dialog). Do NOT end the call.
         debugPrint('WebRTCService: ICE disconnected – attempting restart');
         _pc?.restartIce();
       } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
@@ -97,7 +100,58 @@ class WebRTCService {
       }
     };
 
+    // Listen for data channel created by the remote peer (caregiver side)
+    pc.onDataChannel = (channel) {
+      debugPrint('WebRTCService: Data channel received: ${channel.label}');
+      _dataChannel = channel;
+      _setupDataChannelListeners();
+    };
+
     return pc;
+  }
+
+  /// Setup listeners on the data channel for remote control messages.
+  void _setupDataChannelListeners() {
+    _dataChannel?.onMessage = (message) {
+      try {
+        final data = jsonDecode(message.text) as Map<String, dynamic>;
+        final type = data['type'] as String?;
+
+        switch (type) {
+          case 'touch':
+            // Caregiver sent a touch event → elder processes it
+            if (isRemoteControlActive.value) {
+              incomingTouch.value = {
+                'x': (data['x'] as num).toDouble(),
+                'y': (data['y'] as num).toDouble(),
+              };
+            }
+            break;
+          case 'requestControl':
+            // Caregiver is requesting control → elder sees prompt
+            debugPrint('WebRTCService: Remote control requested');
+            remoteControlRequested.value = true;
+            break;
+          case 'grantControl':
+            // Elder granted control → caregiver can now send touches
+            debugPrint('WebRTCService: Remote control granted');
+            isRemoteControlActive.value = true;
+            break;
+          case 'revokeControl':
+            // Either side revoked control
+            debugPrint('WebRTCService: Remote control revoked');
+            isRemoteControlActive.value = false;
+            remoteControlRequested.value = false;
+            break;
+        }
+      } catch (e) {
+        debugPrint('WebRTCService: Error parsing data channel message: $e');
+      }
+    };
+
+    _dataChannel?.onDataChannelState = (state) {
+      debugPrint('WebRTCService: Data channel state → $state');
+    };
   }
 
   void _listenAndUploadICE(String callId, String side) {
@@ -135,6 +189,13 @@ class WebRTCService {
 
     await _openLocalStream();
     _pc = await _createPC();
+
+    // Create the data channel (elder is the offerer, so it creates the channel)
+    _dataChannel = await _pc!.createDataChannel(
+      'remote_control',
+      RTCDataChannelInit()..ordered = true,
+    );
+    _setupDataChannelListeners();
 
     final callRef = _db.collection('calls').doc();
     _currentCallId = callRef.id;
@@ -381,6 +442,48 @@ class WebRTCService {
     }
   }
 
+  // ─── Remote control ──────────────────────────────────────────────────────────
+
+  /// Caregiver calls this to request control of the elder's screen.
+  void requestRemoteControl() {
+    _sendDataChannelMessage({'type': 'requestControl'});
+    debugPrint('WebRTCService: Sent control request');
+  }
+
+  /// Elder calls this to grant control to the caregiver.
+  void grantRemoteControl() {
+    remoteControlRequested.value = false;
+    isRemoteControlActive.value = true;
+    _sendDataChannelMessage({'type': 'grantControl'});
+    debugPrint('WebRTCService: Granted remote control');
+  }
+
+  /// Either side calls this to revoke remote control.
+  void revokeRemoteControl() {
+    isRemoteControlActive.value = false;
+    remoteControlRequested.value = false;
+    _sendDataChannelMessage({'type': 'revokeControl'});
+    debugPrint('WebRTCService: Revoked remote control');
+  }
+
+  /// Caregiver calls this to send a tap event to the elder.
+  void sendTouchEvent(double normX, double normY) {
+    if (!isRemoteControlActive.value) return;
+    _sendDataChannelMessage({
+      'type': 'touch',
+      'x': normX,
+      'y': normY,
+    });
+  }
+
+  void _sendDataChannelMessage(Map<String, dynamic> data) {
+    if (_dataChannel?.state == RTCDataChannelState.RTCDataChannelOpen) {
+      _dataChannel!.send(RTCDataChannelMessage(jsonEncode(data)));
+    } else {
+      debugPrint('WebRTCService: Data channel not open, cannot send message');
+    }
+  }
+
   // ─── Lifecycle ───────────────────────────────────────────────────────────────
 
   Future<void> hangUp() async {
@@ -404,6 +507,12 @@ class WebRTCService {
 
     remoteStream.value?.dispose();
     remoteStream.value = null;
+
+    _dataChannel?.close();
+    _dataChannel = null;
+
+    isRemoteControlActive.value = false;
+    remoteControlRequested.value = false;
 
     _pc?.close();
     _pc = null;

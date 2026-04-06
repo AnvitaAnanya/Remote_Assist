@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">
+        Allows a remote caregiver to tap on your screen during a Remote Assist call.
+        This service is only active when you grant remote control during a call.
+    </string>
+</resources>
