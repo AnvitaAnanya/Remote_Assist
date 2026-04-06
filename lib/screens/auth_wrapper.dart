@@ -4,7 +4,7 @@ import '../services/firestore_service.dart';
 import '../core/constants.dart';
 import 'login_screen.dart';
 import 'elder_main_nav.dart';
-import 'caregiver_screen.dart';
+import 'caregiver_main_nav.dart';
 import 'role_selection_screen.dart';
 
 class AuthWrapper extends StatelessWidget {
@@ -85,7 +85,7 @@ class _RoleRouterState extends State<_RoleRouter> {
         if (role == 'elder') {
           return const ElderMainNav();
         } else if (role == 'caregiver') {
-          return const CaregiverHomeScreen();
+          return const CaregiverMainNav();
         } else {
           // No role found → user needs to pick a role
           debugPrint("_RoleRouter: No role set. Showing RoleSelectionScreen.");

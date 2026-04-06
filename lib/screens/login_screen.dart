@@ -129,10 +129,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 controller: _passwordController,
                 prefixIcon: Icons.lock_outline,
                 isPassword: true,
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.visibility_outlined, color: Color(0xFF94A3B8)),
-                  onPressed: () {},
-                ),
               ),
               
               // Forgot Password
