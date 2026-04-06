@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter_background/flutter_background.dart';
 
 /// Manages a single WebRTC peer-to-peer call session.
 /// Uses Firestore as the signaling channel (offer/answer/ICE candidates).
@@ -252,6 +253,19 @@ class WebRTCService {
 
   Future<void> _startScreenShare() async {
     try {
+      // 1. Initialize and start a foreground service for MediaProjection
+      const androidConfig = FlutterBackgroundAndroidConfig(
+        notificationTitle: 'Screen Sharing',
+        notificationText: 'Remote Assist is capturing your screen',
+        notificationImportance: AndroidNotificationImportance.normal,
+        enableWifiLock: true,
+      );
+      bool hasPermissions = await FlutterBackground.initialize(androidConfig: androidConfig);
+      if (hasPermissions) {
+        await FlutterBackground.enableBackgroundExecution();
+      }
+
+      // 2. Request the system screen recording permission dialog
       _screenShareStream = await navigator.mediaDevices.getDisplayMedia({
         'audio': false,
         'video': true,
@@ -296,6 +310,11 @@ class WebRTCService {
 
   Future<void> _stopScreenShare() async {
     try {
+      // Disable flutter_background immediately
+      if (FlutterBackground.isBackgroundExecutionEnabled) {
+        await FlutterBackground.disableBackgroundExecution();
+      }
+
       _screenShareStream?.getTracks().forEach((t) => t.stop());
       _screenShareStream?.dispose();
       _screenShareStream = null;
