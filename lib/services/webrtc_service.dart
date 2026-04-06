@@ -301,7 +301,7 @@ class WebRTCService {
 
       // Replace the video track in the local stream so PiP shows the screen
       if (localStream.value != null) {
-        for (final t in localStream.value!.getVideoTracks()) {
+        for (final t in localStream.value!.getVideoTracks().toList()) {
           await localStream.value!.removeTrack(t);
         }
         await localStream.value!.addTrack(screenTrack);
@@ -335,14 +335,20 @@ class WebRTCService {
       _screenShareStream?.dispose();
       _screenShareStream = null;
 
-      // Get a fresh camera track to restore
-      final cameraStream = await navigator.mediaDevices.getUserMedia({
-        'audio': false,
-        'video': {'facingMode': _isFrontCamera ? 'user' : 'environment'},
+      // Get a completely fresh camera+audio stream.
+      // This gives us a NEW MediaStream object so the renderer fully re-attaches.
+      final freshStream = await navigator.mediaDevices.getUserMedia({
+        'audio': true,
+        'video': {
+          'facingMode': _isFrontCamera ? 'user' : 'environment',
+          'width': {'ideal': 640},
+          'height': {'ideal': 480},
+        },
       });
-      final cameraTrack = cameraStream.getVideoTracks().first;
 
-      // Replace sender track back to camera
+      final cameraTrack = freshStream.getVideoTracks().first;
+
+      // Replace the video sender's track in the peer connection
       if (_pc != null) {
         final senders = await _pc!.getSenders();
         for (final sender in senders) {
@@ -351,26 +357,27 @@ class WebRTCService {
             break;
           }
         }
-      }
-
-      // Restore local stream video track
-      if (localStream.value != null) {
-        for (final t in localStream.value!.getVideoTracks()) {
-          await localStream.value!.removeTrack(t);
-          t.stop();
+        // Also replace the audio sender so toggleMic works on the new tracks
+        final freshAudio = freshStream.getAudioTracks().first;
+        for (final sender in senders) {
+          if (sender.track?.kind == 'audio') {
+            await sender.replaceTrack(freshAudio);
+            break;
+          }
         }
-        await localStream.value!.addTrack(cameraTrack);
       }
 
-      // Poke the notifier
-      final s = localStream.value;
-      localStream.value = null;
-      localStream.value = s;
+      // Stop old local stream tracks and dispose
+      localStream.value?.getTracks().forEach((t) => t.stop());
 
-      isScreenSharing.value = false;
+      // Set the brand new stream — new object reference forces renderer refresh
+      localStream.value = freshStream;
+
       debugPrint('WebRTCService: Screen share stopped, camera restored');
     } catch (e) {
       debugPrint('WebRTCService: Stop screen share error: $e');
+    } finally {
+      isScreenSharing.value = false;
     }
   }
 

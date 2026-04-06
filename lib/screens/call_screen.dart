@@ -54,7 +54,7 @@ class _CallScreenState extends State<CallScreen> {
 
   void _onLocalStreamChanged() {
     final stream = widget.webrtcService.localStream.value;
-    if (stream != null && mounted) {
+    if (mounted) {
       setState(() => _localRenderer.srcObject = stream);
     }
   }
