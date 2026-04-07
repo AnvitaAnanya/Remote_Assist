@@ -16,7 +16,7 @@ class _ElderMainNavState extends State<ElderMainNav> {
   
   final List<Widget> _pages = [
     const ElderHomeScreen(),
-    const SessionHistoryScreen(), // Will crash if not implemented, I'll mock it soon
+    // SessionHistoryScreen hidden for now — functionality kept in code
     const SettingsScreen(),
   ];
 
@@ -46,11 +46,6 @@ class _ElderMainNavState extends State<ElderMainNav> {
               icon: Icon(Icons.home_outlined),
               activeIcon: Icon(Icons.home),
               label: "Home",
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.history_outlined),
-              activeIcon: Icon(Icons.history),
-              label: "History",
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.settings_outlined),

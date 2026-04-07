@@ -436,7 +436,7 @@ class _CallScreenState extends State<CallScreen> {
                 : _buildWaitingOverlay(status),
 
             // ── Draggable Local PiP ────────────────────────────────────────
-            _buildDraggablePip(screenSize),
+            if (!_isScreenSharing) _buildDraggablePip(screenSize),
 
             // ── Status badge ────────────────────────────────────────────────
             Positioned(
@@ -498,6 +498,11 @@ class _CallScreenState extends State<CallScreen> {
   Widget _buildDraggablePip(Size screenSize) {
     final offset = _pipOffset ?? _defaultPipOffset(screenSize);
 
+    // During screen share on the caregiver side, show the elder's shared screen
+    // in the PiP instead of the caregiver's own camera.
+    final bool showRemoteInPip = !_isElder && _isScreenSharing;
+    final RTCVideoRenderer pipRenderer = showRemoteInPip ? _remoteRenderer : _localRenderer;
+
     return AnimatedPositioned(
       duration: _isDraggingPip ? Duration.zero : const Duration(milliseconds: 300),
       curve: Curves.easeOut,
@@ -506,7 +511,7 @@ class _CallScreenState extends State<CallScreen> {
       width: _pipWidth,
       height: _pipHeight,
       child: GestureDetector(
-        // Tap PiP to switch camera (quick shortcut)
+        // Tap PiP to switch camera (quick shortcut) — only when showing local cam
         onTap: _isElder && !_isScreenSharing ? _switchCamera : null,
         onPanStart: (_) => setState(() => _isDraggingPip = true),
         onPanUpdate: (details) {
@@ -528,10 +533,10 @@ class _CallScreenState extends State<CallScreen> {
           children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: _localRenderer.srcObject != null
+              child: pipRenderer.srcObject != null
                   ? RTCVideoView(
-                      _localRenderer,
-                      mirror: !_isScreenSharing,
+                      pipRenderer,
+                      mirror: !_isScreenSharing && !showRemoteInPip,
                       objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                     )
                   : Container(
@@ -539,7 +544,7 @@ class _CallScreenState extends State<CallScreen> {
                       child: const Icon(Icons.videocam_off, color: Colors.white54),
                     ),
             ),
-            // Camera flip hint overlay on PiP
+            // Camera flip hint overlay on PiP (only when showing local camera)
             if (_isElder && !_isScreenSharing)
               Positioned(
                 bottom: 4,
@@ -555,7 +560,7 @@ class _CallScreenState extends State<CallScreen> {
                 ),
               ),
             // Screen share indicator on PiP
-            if (_isScreenSharing)
+            if (_isScreenSharing && !showRemoteInPip)
               Positioned(
                 bottom: 4,
                 left: 4,
@@ -566,6 +571,21 @@ class _CallScreenState extends State<CallScreen> {
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: const Text('Screen',
+                      style: TextStyle(color: Colors.white, fontSize: 9)),
+                ),
+              ),
+            // Elder's screen label when showing remote in PiP (caregiver only)
+            if (showRemoteInPip)
+              Positioned(
+                bottom: 4,
+                left: 4,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.green.withAlpha(200),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text('Elder',
                       style: TextStyle(color: Colors.white, fontSize: 9)),
                 ),
               ),

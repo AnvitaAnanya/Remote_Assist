@@ -16,7 +16,7 @@ class _CaregiverMainNavState extends State<CaregiverMainNav> {
 
   final List<Widget> _pages = [
     const CaregiverHomeScreen(),
-    const SessionHistoryScreen(),
+    // SessionHistoryScreen hidden for now — functionality kept in code
     const SettingsScreen(),
   ];
 
@@ -46,11 +46,6 @@ class _CaregiverMainNavState extends State<CaregiverMainNav> {
               icon: Icon(Icons.home_outlined),
               activeIcon: Icon(Icons.home),
               label: "Home",
-            ),
-            BottomNavigationBarItem(
-              icon: Icon(Icons.history_outlined),
-              activeIcon: Icon(Icons.history),
-              label: "History",
             ),
             BottomNavigationBarItem(
               icon: Icon(Icons.settings_outlined),
