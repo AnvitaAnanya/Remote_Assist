@@ -133,21 +133,53 @@ class RemoteControlService {
     }
   }
 
-  /// Injects a long press at normalized coordinates (0.0 – 1.0).
-  static Future<bool> injectLongPress(double normX, double normY) async {
+  /// Starts a continued gesture (finger down) at normalized coordinates (0.0 – 1.0).
+  /// The finger stays pressed until [injectDragUpdate] or [injectDragEnd] is called.
+  /// Used for both long-press-and-hold and drag-and-drop.
+  static Future<bool> injectDragStart(double normX, double normY) async {
     try {
-      final result = await _channel.invokeMethod<bool>('injectLongPress', {
+      final result = await _channel.invokeMethod<bool>('injectDragStart', {
         'x': normX,
         'y': normY,
       });
       return result ?? false;
     } catch (e) {
-      debugPrint('RemoteControlService: Error injecting long press: $e');
+      debugPrint('RemoteControlService: Error injecting drag start: $e');
       return false;
     }
   }
 
-  /// Cancels any ongoing gesture (e.g. ends a long press early).
+  /// Continues an ongoing drag gesture to a new position.
+  /// The finger stays pressed.
+  static Future<bool> injectDragUpdate(double normX, double normY) async {
+    try {
+      final result = await _channel.invokeMethod<bool>('injectDragUpdate', {
+        'x': normX,
+        'y': normY,
+      });
+      return result ?? false;
+    } catch (e) {
+      debugPrint('RemoteControlService: Error injecting drag update: $e');
+      return false;
+    }
+  }
+
+  /// Ends a continued gesture at the given position (lifts the finger).
+  /// Completes a long press release or drops a dragged item.
+  static Future<bool> injectDragEnd(double normX, double normY) async {
+    try {
+      final result = await _channel.invokeMethod<bool>('injectDragEnd', {
+        'x': normX,
+        'y': normY,
+      });
+      return result ?? false;
+    } catch (e) {
+      debugPrint('RemoteControlService: Error injecting drag end: $e');
+      return false;
+    }
+  }
+
+  /// Cancels any ongoing gesture (safety fallback).
   static Future<bool> cancelGesture() async {
     try {
       final result = await _channel.invokeMethod<bool>('cancelGesture');

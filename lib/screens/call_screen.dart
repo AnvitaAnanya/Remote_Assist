@@ -71,7 +71,8 @@ class _CallScreenState extends State<CallScreen> {
     widget.webrtcService.incomingTouch.addListener(_onIncomingTouch);
     widget.webrtcService.incomingSwipe.addListener(_onIncomingSwipe);
     widget.webrtcService.incomingLongPress.addListener(_onIncomingLongPress);
-    widget.webrtcService.incomingLongPressEnd.addListener(_onIncomingLongPressEnd);
+    widget.webrtcService.incomingDragUpdate.addListener(_onIncomingDragUpdate);
+    widget.webrtcService.incomingDragEnd.addListener(_onIncomingDragEnd);
   }
 
   Future<void> _initRenderers() async {
@@ -164,17 +165,24 @@ class _CallScreenState extends State<CallScreen> {
   void _onIncomingLongPress() {
     final lp = widget.webrtcService.incomingLongPress.value;
     if (lp != null && _isElder && _isRemoteControlActive) {
-      // Start a long press (holds for 30s, cancelled by _onIncomingLongPressEnd)
-      RemoteControlService.injectLongPress(lp['x']!, lp['y']!);
+      // Start a continued gesture (finger down, stays pressed)
+      RemoteControlService.injectDragStart(lp['x']!, lp['y']!);
     }
   }
 
-  void _onIncomingLongPressEnd() {
-    if (widget.webrtcService.incomingLongPressEnd.value &&
-        _isElder &&
-        _isRemoteControlActive) {
-      // Cancel the ongoing long press gesture
-      RemoteControlService.cancelGesture();
+  void _onIncomingDragUpdate() {
+    final du = widget.webrtcService.incomingDragUpdate.value;
+    if (du != null && _isElder && _isRemoteControlActive) {
+      // Continue the gesture to the new position (finger still pressed)
+      RemoteControlService.injectDragUpdate(du['x']!, du['y']!);
+    }
+  }
+
+  void _onIncomingDragEnd() {
+    final de = widget.webrtcService.incomingDragEnd.value;
+    if (de != null && _isElder && _isRemoteControlActive) {
+      // End the continued gesture (lift finger)
+      RemoteControlService.injectDragEnd(de['x']!, de['y']!);
     }
   }
 
@@ -399,7 +407,8 @@ class _CallScreenState extends State<CallScreen> {
     widget.webrtcService.incomingTouch.removeListener(_onIncomingTouch);
     widget.webrtcService.incomingSwipe.removeListener(_onIncomingSwipe);
     widget.webrtcService.incomingLongPress.removeListener(_onIncomingLongPress);
-    widget.webrtcService.incomingLongPressEnd.removeListener(_onIncomingLongPressEnd);
+    widget.webrtcService.incomingDragUpdate.removeListener(_onIncomingDragUpdate);
+    widget.webrtcService.incomingDragEnd.removeListener(_onIncomingDragEnd);
     _localRenderer.dispose();
     _remoteRenderer.dispose();
     super.dispose();
@@ -599,9 +608,21 @@ class _CallScreenState extends State<CallScreen> {
               widget.webrtcService.sendLongPressStartEvent(normX, normY);
               debugPrint('Remote long press START: ($normX, $normY)');
             },
+            onLongPressMoveUpdate: (details) {
+              final normX =
+                  (details.localPosition.dx / constraints.maxWidth).clamp(0.0, 1.0);
+              final normY =
+                  (details.localPosition.dy / constraints.maxHeight).clamp(0.0, 1.0);
+              widget.webrtcService.sendDragUpdateEvent(normX, normY);
+              debugPrint('Remote drag UPDATE: ($normX, $normY)');
+            },
             onLongPressEnd: (details) {
-              widget.webrtcService.sendLongPressEndEvent();
-              debugPrint('Remote long press END');
+              final normX =
+                  (details.localPosition.dx / constraints.maxWidth).clamp(0.0, 1.0);
+              final normY =
+                  (details.localPosition.dy / constraints.maxHeight).clamp(0.0, 1.0);
+              widget.webrtcService.sendLongPressEndEvent(normX, normY);
+              debugPrint('Remote long press END: ($normX, $normY)');
             },
             // ── Swipe detection ───────────────────────────────────────
             onPanStart: (details) {

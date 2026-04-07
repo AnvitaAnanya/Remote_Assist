@@ -35,8 +35,11 @@ class WebRTCService {
   /// Incoming long-press start event from caregiver: {"x", "y": 0.0-1.0}
   ValueNotifier<Map<String, double>?> incomingLongPress = ValueNotifier(null);
 
-  /// Fires when caregiver releases a long press.
-  ValueNotifier<bool> incomingLongPressEnd = ValueNotifier(false);
+  /// Incoming drag update during a long press: {"x", "y": 0.0-1.0}
+  ValueNotifier<Map<String, double>?> incomingDragUpdate = ValueNotifier(null);
+
+  /// Fires when caregiver releases a long press / drag: {"x", "y": 0.0-1.0}
+  ValueNotifier<Map<String, double>?> incomingDragEnd = ValueNotifier(null);
 
   // ─── Private state ──────────────────────────────────────────────────────────
 
@@ -151,7 +154,7 @@ class WebRTCService {
             }
             break;
           case 'longPressStart':
-            // Caregiver started a long press → elder starts the hold
+            // Caregiver started a long press → elder starts continued gesture
             if (isRemoteControlActive.value) {
               incomingLongPress.value = {
                 'x': (data['x'] as num).toDouble(),
@@ -159,12 +162,22 @@ class WebRTCService {
               };
             }
             break;
-          case 'longPressEnd':
-            // Caregiver released the long press → elder cancels the hold
+          case 'dragUpdate':
+            // Caregiver is dragging during a long press → elder continues gesture
             if (isRemoteControlActive.value) {
-              incomingLongPressEnd.value = true;
-              // Reset so next event triggers the listener again
-              Future.microtask(() => incomingLongPressEnd.value = false);
+              incomingDragUpdate.value = {
+                'x': (data['x'] as num).toDouble(),
+                'y': (data['y'] as num).toDouble(),
+              };
+            }
+            break;
+          case 'longPressEnd':
+            // Caregiver released the long press / drag → elder lifts finger
+            if (isRemoteControlActive.value) {
+              incomingDragEnd.value = {
+                'x': (data['x'] as num).toDouble(),
+                'y': (data['y'] as num).toDouble(),
+              };
             }
             break;
           case 'requestControl':
@@ -571,10 +584,24 @@ class WebRTCService {
     });
   }
 
-  /// Caregiver calls this when they release a long press.
-  void sendLongPressEndEvent() {
+  /// Caregiver calls this when they drag during a long press.
+  void sendDragUpdateEvent(double normX, double normY) {
     if (!isRemoteControlActive.value) return;
-    _sendDataChannelMessage({'type': 'longPressEnd'});
+    _sendDataChannelMessage({
+      'type': 'dragUpdate',
+      'x': normX,
+      'y': normY,
+    });
+  }
+
+  /// Caregiver calls this when they release a long press / drag.
+  void sendLongPressEndEvent(double normX, double normY) {
+    if (!isRemoteControlActive.value) return;
+    _sendDataChannelMessage({
+      'type': 'longPressEnd',
+      'x': normX,
+      'y': normY,
+    });
   }
 
   void _sendDataChannelMessage(Map<String, dynamic> data) {
@@ -616,6 +643,8 @@ class WebRTCService {
     remoteControlRequested.value = false;
     incomingSwipe.value = null;
     incomingLongPress.value = null;
+    incomingDragUpdate.value = null;
+    incomingDragEnd.value = null;
 
     _pc?.close();
     _pc = null;

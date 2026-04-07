@@ -147,7 +147,7 @@ class MainActivity : FlutterActivity() {
                         result.success(success)
                     }
 
-                    "injectLongPress" -> {
+                    "injectDragStart" -> {
                         val normX = call.argument<Double>("x") ?: run {
                             result.error("INVALID_ARG", "Missing x coordinate", null)
                             return@setMethodCallHandler
@@ -163,7 +163,45 @@ class MainActivity : FlutterActivity() {
                         val screenX = (normX * metrics.widthPixels).toFloat()
                         val screenY = (normY * metrics.heightPixels).toFloat()
 
-                        val success = RemoteControlService.injectLongPress(screenX, screenY)
+                        val success = RemoteControlService.injectDragStart(screenX, screenY)
+                        result.success(success)
+                    }
+
+                    "injectDragUpdate" -> {
+                        val normX = call.argument<Double>("x") ?: run {
+                            result.error("INVALID_ARG", "Missing x coordinate", null)
+                            return@setMethodCallHandler
+                        }
+                        val normY = call.argument<Double>("y") ?: run {
+                            result.error("INVALID_ARG", "Missing y coordinate", null)
+                            return@setMethodCallHandler
+                        }
+
+                        val metrics = DisplayMetrics()
+                        windowManager.defaultDisplay.getRealMetrics(metrics)
+                        val screenX = (normX * metrics.widthPixels).toFloat()
+                        val screenY = (normY * metrics.heightPixels).toFloat()
+
+                        val success = RemoteControlService.injectDragUpdate(screenX, screenY)
+                        result.success(success)
+                    }
+
+                    "injectDragEnd" -> {
+                        val normX = call.argument<Double>("x") ?: run {
+                            result.error("INVALID_ARG", "Missing x coordinate", null)
+                            return@setMethodCallHandler
+                        }
+                        val normY = call.argument<Double>("y") ?: run {
+                            result.error("INVALID_ARG", "Missing y coordinate", null)
+                            return@setMethodCallHandler
+                        }
+
+                        val metrics = DisplayMetrics()
+                        windowManager.defaultDisplay.getRealMetrics(metrics)
+                        val screenX = (normX * metrics.widthPixels).toFloat()
+                        val screenY = (normY * metrics.heightPixels).toFloat()
+
+                        val success = RemoteControlService.injectDragEnd(screenX, screenY)
                         result.success(success)
                     }
 
