@@ -140,10 +140,6 @@ class _SignupScreenState extends State<SignupScreen> {
                 controller: _passwordController,
                 prefixIcon: Icons.lock_outline,
                 isPassword: true,
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.visibility_outlined, color: Color(0xFF94A3B8)),
-                  onPressed: () {},
-                ),
               ),
               const SizedBox(height: 32),
 

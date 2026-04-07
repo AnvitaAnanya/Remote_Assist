@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -18,12 +19,33 @@ class WebRTCService {
   /// Whether screen share is currently active (elder only).
   ValueNotifier<bool> isScreenSharing = ValueNotifier(false);
 
+  /// Whether remote control is active.
+  ValueNotifier<bool> isRemoteControlActive = ValueNotifier(false);
+
+  /// Fires when caregiver requests control (elder sees this).
+  ValueNotifier<bool> remoteControlRequested = ValueNotifier(false);
+
+  /// Incoming touch event from caregiver: {"x": 0.0-1.0, "y": 0.0-1.0}
+  ValueNotifier<Map<String, double>?> incomingTouch = ValueNotifier(null);
+
+  /// Incoming swipe event from caregiver:
+  /// {"startX", "startY", "endX", "endY": 0.0-1.0, "duration": ms}
+  ValueNotifier<Map<String, double>?> incomingSwipe = ValueNotifier(null);
+
+  /// Incoming long-press start event from caregiver: {"x", "y": 0.0-1.0}
+  ValueNotifier<Map<String, double>?> incomingLongPress = ValueNotifier(null);
+
+  /// Fires when caregiver releases a long press.
+  ValueNotifier<bool> incomingLongPressEnd = ValueNotifier(false);
+
   // ─── Private state ──────────────────────────────────────────────────────────
 
   RTCPeerConnection? _pc;
+  RTCDataChannel? _dataChannel;
   String? _currentCallId;
   bool _isFrontCamera = true;
   MediaStream? _screenShareStream;
+  bool _isStartingScreenShare = false;
 
   static const _iceServers = {
     'iceServers': [
@@ -70,25 +92,105 @@ class WebRTCService {
       debugPrint('WebRTCService: Connection state → $state');
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
         status.value = CallStatus.connected;
-      } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
-          state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
-        status.value = CallStatus.ended;
+      } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
+        if (!_isStartingScreenShare) status.value = CallStatus.ended;
       }
     };
 
     pc.onIceConnectionState = (state) {
       debugPrint('WebRTCService: ICE Connection state → $state');
-      // Some platforms fire ICE connection state reliably instead of PC connection state.
       if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
           state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
         status.value = CallStatus.connected;
-      } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed ||
-          state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
-        status.value = CallStatus.ended;
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateDisconnected) {
+        debugPrint('WebRTCService: ICE disconnected – attempting restart');
+        _pc?.restartIce();
+      } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+        if (!_isStartingScreenShare) status.value = CallStatus.ended;
       }
     };
 
+    // Listen for data channel created by the remote peer (caregiver side)
+    pc.onDataChannel = (channel) {
+      debugPrint('WebRTCService: Data channel received: ${channel.label}');
+      _dataChannel = channel;
+      _setupDataChannelListeners();
+    };
+
     return pc;
+  }
+
+  /// Setup listeners on the data channel for remote control messages.
+  void _setupDataChannelListeners() {
+    _dataChannel?.onMessage = (message) {
+      try {
+        final data = jsonDecode(message.text) as Map<String, dynamic>;
+        final type = data['type'] as String?;
+
+        switch (type) {
+          case 'touch':
+            // Caregiver sent a touch event → elder processes it
+            if (isRemoteControlActive.value) {
+              incomingTouch.value = {
+                'x': (data['x'] as num).toDouble(),
+                'y': (data['y'] as num).toDouble(),
+              };
+            }
+            break;
+          case 'swipe':
+            // Caregiver sent a swipe event → elder processes it
+            if (isRemoteControlActive.value) {
+              incomingSwipe.value = {
+                'startX': (data['startX'] as num).toDouble(),
+                'startY': (data['startY'] as num).toDouble(),
+                'endX': (data['endX'] as num).toDouble(),
+                'endY': (data['endY'] as num).toDouble(),
+                'duration': (data['duration'] as num).toDouble(),
+              };
+            }
+            break;
+          case 'longPressStart':
+            // Caregiver started a long press → elder starts the hold
+            if (isRemoteControlActive.value) {
+              incomingLongPress.value = {
+                'x': (data['x'] as num).toDouble(),
+                'y': (data['y'] as num).toDouble(),
+              };
+            }
+            break;
+          case 'longPressEnd':
+            // Caregiver released the long press → elder cancels the hold
+            if (isRemoteControlActive.value) {
+              incomingLongPressEnd.value = true;
+              // Reset so next event triggers the listener again
+              Future.microtask(() => incomingLongPressEnd.value = false);
+            }
+            break;
+          case 'requestControl':
+            // Caregiver is requesting control → elder sees prompt
+            debugPrint('WebRTCService: Remote control requested');
+            remoteControlRequested.value = true;
+            break;
+          case 'grantControl':
+            // Elder granted control → caregiver can now send touches
+            debugPrint('WebRTCService: Remote control granted');
+            isRemoteControlActive.value = true;
+            break;
+          case 'revokeControl':
+            // Either side revoked control
+            debugPrint('WebRTCService: Remote control revoked');
+            isRemoteControlActive.value = false;
+            remoteControlRequested.value = false;
+            break;
+        }
+      } catch (e) {
+        debugPrint('WebRTCService: Error parsing data channel message: $e');
+      }
+    };
+
+    _dataChannel?.onDataChannelState = (state) {
+      debugPrint('WebRTCService: Data channel state → $state');
+    };
   }
 
   void _listenAndUploadICE(String callId, String side) {
@@ -126,6 +228,13 @@ class WebRTCService {
 
     await _openLocalStream();
     _pc = await _createPC();
+
+    // Create the data channel (elder is the offerer, so it creates the channel)
+    _dataChannel = await _pc!.createDataChannel(
+      'remote_control',
+      RTCDataChannelInit()..ordered = true,
+    );
+    _setupDataChannelListeners();
 
     final callRef = _db.collection('calls').doc();
     _currentCallId = callRef.id;
@@ -252,20 +361,26 @@ class WebRTCService {
   }
 
   Future<void> _startScreenShare() async {
+    // Guard: prevents transient ICE disconnections during the MediaProjection
+    // permission dialog (which briefly backgrounds the app) from ending the call.
+    _isStartingScreenShare = true;
     try {
-      // 1. Initialize and start a foreground service for MediaProjection
+      // On Android 10+, the OS requires a running foreground service before the
+      // MediaProjection permission result returns (app is briefly backgrounded).
+      // We use flutter_background to start one BEFORE calling getDisplayMedia().
+      // flutter_webrtc's own MediaProjectionService then takes over for the capture.
       const androidConfig = FlutterBackgroundAndroidConfig(
         notificationTitle: 'Screen Sharing',
-        notificationText: 'Remote Assist is capturing your screen',
+        notificationText: 'Remote Assist is sharing your screen',
         notificationImportance: AndroidNotificationImportance.Default,
-        enableWifiLock: true,
+        enableWifiLock: false,
       );
-      bool hasPermissions = await FlutterBackground.initialize(androidConfig: androidConfig);
-      if (hasPermissions) {
+      final hasPermission =
+          await FlutterBackground.initialize(androidConfig: androidConfig);
+      if (hasPermission) {
         await FlutterBackground.enableBackgroundExecution();
       }
 
-      // 2. Request the system screen recording permission dialog
       _screenShareStream = await navigator.mediaDevices.getDisplayMedia({
         'audio': false,
         'video': true,
@@ -286,7 +401,7 @@ class WebRTCService {
 
       // Replace the video track in the local stream so PiP shows the screen
       if (localStream.value != null) {
-        for (final t in localStream.value!.getVideoTracks()) {
+        for (final t in localStream.value!.getVideoTracks().toList()) {
           await localStream.value!.removeTrack(t);
         }
         await localStream.value!.addTrack(screenTrack);
@@ -305,28 +420,35 @@ class WebRTCService {
     } catch (e) {
       debugPrint('WebRTCService: Screen share error: $e');
       rethrow;
+    } finally {
+      _isStartingScreenShare = false;
     }
   }
 
   Future<void> _stopScreenShare() async {
     try {
-      // Disable flutter_background immediately
+      // Stop the keep-alive foreground service now that screen share is ending.
       if (FlutterBackground.isBackgroundExecutionEnabled) {
         await FlutterBackground.disableBackgroundExecution();
       }
-
       _screenShareStream?.getTracks().forEach((t) => t.stop());
       _screenShareStream?.dispose();
       _screenShareStream = null;
 
-      // Get a fresh camera track to restore
-      final cameraStream = await navigator.mediaDevices.getUserMedia({
-        'audio': false,
-        'video': {'facingMode': _isFrontCamera ? 'user' : 'environment'},
+      // Get a completely fresh camera+audio stream.
+      // This gives us a NEW MediaStream object so the renderer fully re-attaches.
+      final freshStream = await navigator.mediaDevices.getUserMedia({
+        'audio': true,
+        'video': {
+          'facingMode': _isFrontCamera ? 'user' : 'environment',
+          'width': {'ideal': 640},
+          'height': {'ideal': 480},
+        },
       });
-      final cameraTrack = cameraStream.getVideoTracks().first;
 
-      // Replace sender track back to camera
+      final cameraTrack = freshStream.getVideoTracks().first;
+
+      // Replace the video sender's track in the peer connection
       if (_pc != null) {
         final senders = await _pc!.getSenders();
         for (final sender in senders) {
@@ -335,26 +457,102 @@ class WebRTCService {
             break;
           }
         }
-      }
-
-      // Restore local stream video track
-      if (localStream.value != null) {
-        for (final t in localStream.value!.getVideoTracks()) {
-          await localStream.value!.removeTrack(t);
-          t.stop();
+        // Also replace the audio sender so toggleMic works on the new tracks
+        final freshAudio = freshStream.getAudioTracks().first;
+        for (final sender in senders) {
+          if (sender.track?.kind == 'audio') {
+            await sender.replaceTrack(freshAudio);
+            break;
+          }
         }
-        await localStream.value!.addTrack(cameraTrack);
       }
 
-      // Poke the notifier
-      final s = localStream.value;
-      localStream.value = null;
-      localStream.value = s;
+      // Stop old local stream tracks and dispose
+      localStream.value?.getTracks().forEach((t) => t.stop());
 
-      isScreenSharing.value = false;
+      // Set the brand new stream — new object reference forces renderer refresh
+      localStream.value = freshStream;
+
       debugPrint('WebRTCService: Screen share stopped, camera restored');
     } catch (e) {
       debugPrint('WebRTCService: Stop screen share error: $e');
+    } finally {
+      isScreenSharing.value = false;
+    }
+  }
+
+  // ─── Remote control ──────────────────────────────────────────────────────────
+
+  /// Caregiver calls this to request control of the elder's screen.
+  void requestRemoteControl() {
+    _sendDataChannelMessage({'type': 'requestControl'});
+    debugPrint('WebRTCService: Sent control request');
+  }
+
+  /// Elder calls this to grant control to the caregiver.
+  void grantRemoteControl() {
+    remoteControlRequested.value = false;
+    isRemoteControlActive.value = true;
+    _sendDataChannelMessage({'type': 'grantControl'});
+    debugPrint('WebRTCService: Granted remote control');
+  }
+
+  /// Either side calls this to revoke remote control.
+  void revokeRemoteControl() {
+    isRemoteControlActive.value = false;
+    remoteControlRequested.value = false;
+    _sendDataChannelMessage({'type': 'revokeControl'});
+    debugPrint('WebRTCService: Revoked remote control');
+  }
+
+  /// Caregiver calls this to send a tap event to the elder.
+  void sendTouchEvent(double normX, double normY) {
+    if (!isRemoteControlActive.value) return;
+    _sendDataChannelMessage({
+      'type': 'touch',
+      'x': normX,
+      'y': normY,
+    });
+  }
+
+  /// Caregiver calls this to send a swipe event to the elder.
+  void sendSwipeEvent(
+    double startX, double startY,
+    double endX, double endY,
+    int durationMs,
+  ) {
+    if (!isRemoteControlActive.value) return;
+    _sendDataChannelMessage({
+      'type': 'swipe',
+      'startX': startX,
+      'startY': startY,
+      'endX': endX,
+      'endY': endY,
+      'duration': durationMs,
+    });
+  }
+
+  /// Caregiver calls this when they start a long press.
+  void sendLongPressStartEvent(double normX, double normY) {
+    if (!isRemoteControlActive.value) return;
+    _sendDataChannelMessage({
+      'type': 'longPressStart',
+      'x': normX,
+      'y': normY,
+    });
+  }
+
+  /// Caregiver calls this when they release a long press.
+  void sendLongPressEndEvent() {
+    if (!isRemoteControlActive.value) return;
+    _sendDataChannelMessage({'type': 'longPressEnd'});
+  }
+
+  void _sendDataChannelMessage(Map<String, dynamic> data) {
+    if (_dataChannel?.state == RTCDataChannelState.RTCDataChannelOpen) {
+      _dataChannel!.send(RTCDataChannelMessage(jsonEncode(data)));
+    } else {
+      debugPrint('WebRTCService: Data channel not open, cannot send message');
     }
   }
 
@@ -381,6 +579,14 @@ class WebRTCService {
 
     remoteStream.value?.dispose();
     remoteStream.value = null;
+
+    _dataChannel?.close();
+    _dataChannel = null;
+
+    isRemoteControlActive.value = false;
+    remoteControlRequested.value = false;
+    incomingSwipe.value = null;
+    incomingLongPress.value = null;
 
     _pc?.close();
     _pc = null;
