@@ -257,7 +257,7 @@ class WebRTCService {
       const androidConfig = FlutterBackgroundAndroidConfig(
         notificationTitle: 'Screen Sharing',
         notificationText: 'Remote Assist is capturing your screen',
-        notificationImportance: AndroidNotificationImportance.normal,
+        notificationImportance: AndroidNotificationImportance.Default,
         enableWifiLock: true,
       );
       bool hasPermissions = await FlutterBackground.initialize(androidConfig: androidConfig);
