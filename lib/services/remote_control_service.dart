@@ -1,11 +1,32 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-/// Bridge to the native Android RemoteControlService (Accessibility Service).
-/// Provides methods to check/enable the service and inject tap gestures.
+/// Bridge to the native Android RemoteControlService (Accessibility Service)
+/// and the FloatingButtonService (overlay revoke button).
+///
+/// Provides methods to:
+/// - Check / enable the accessibility service
+/// - Inject gestures (tap, swipe, long press)
+/// - Show / hide a floating overlay button that revokes remote control
 class RemoteControlService {
   static const _channel =
       MethodChannel('com.example.remote_assist/remote_control');
+
+  /// Callback fired when the elder taps the floating revoke button
+  /// (works system-wide, even when another app is in the foreground).
+  static VoidCallback? onFloatingButtonClicked;
+
+  /// Must be called once at startup to register the platform → Flutter callback.
+  static void init() {
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'onFloatingButtonClicked') {
+        debugPrint('RemoteControlService: Floating button tapped — revoking');
+        onFloatingButtonClicked?.call();
+      }
+    });
+  }
+
+  // ─── Accessibility service ───────────────────────────────────────────────
 
   /// Returns true if the Accessibility Service is currently enabled and running.
   static Future<bool> isAccessibilityEnabled() async {
@@ -28,8 +49,54 @@ class RemoteControlService {
     }
   }
 
+  // ─── Overlay permission ──────────────────────────────────────────────────
+
+  /// Returns true if the app has permission to draw over other apps.
+  static Future<bool> canDrawOverlays() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('canDrawOverlays');
+      return result ?? false;
+    } catch (e) {
+      debugPrint('RemoteControlService: Error checking overlay permission: $e');
+      return false;
+    }
+  }
+
+  /// Opens the system settings page to request overlay permission.
+  static Future<void> requestOverlayPermission() async {
+    try {
+      await _channel.invokeMethod('requestOverlayPermission');
+    } catch (e) {
+      debugPrint('RemoteControlService: Error requesting overlay permission: $e');
+    }
+  }
+
+  // ─── Floating revoke button ──────────────────────────────────────────────
+
+  /// Shows the floating orange revoke button on top of all apps.
+  /// Returns false if overlay permission is not granted.
+  static Future<bool> showFloatingButton() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('showFloatingButton');
+      return result ?? false;
+    } catch (e) {
+      debugPrint('RemoteControlService: Error showing floating button: $e');
+      return false;
+    }
+  }
+
+  /// Hides the floating revoke button.
+  static Future<void> hideFloatingButton() async {
+    try {
+      await _channel.invokeMethod('hideFloatingButton');
+    } catch (e) {
+      debugPrint('RemoteControlService: Error hiding floating button: $e');
+    }
+  }
+
+  // ─── Gesture injection ───────────────────────────────────────────────────
+
   /// Injects a tap at normalized coordinates (0.0 – 1.0) on the elder's screen.
-  /// The native side converts these to actual screen pixels.
   static Future<bool> injectTap(double normX, double normY) async {
     try {
       final result = await _channel.invokeMethod<bool>('injectTap', {
@@ -43,9 +110,7 @@ class RemoteControlService {
     }
   }
 
-  /// Injects a swipe from (normStartX, normStartY) to (normEndX, normEndY)
-  /// over [durationMs] milliseconds on the elder's screen.
-  /// All coordinates are normalized (0.0 – 1.0).
+  /// Injects a swipe gesture.
   static Future<bool> injectSwipe(
     double normStartX,
     double normStartY,
@@ -69,7 +134,6 @@ class RemoteControlService {
   }
 
   /// Injects a long press at normalized coordinates (0.0 – 1.0).
-  /// Holds for up to 30 seconds — call [cancelGesture] to release early.
   static Future<bool> injectLongPress(double normX, double normY) async {
     try {
       final result = await _channel.invokeMethod<bool>('injectLongPress', {

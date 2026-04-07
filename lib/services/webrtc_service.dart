@@ -46,6 +46,7 @@ class WebRTCService {
   bool _isFrontCamera = true;
   MediaStream? _screenShareStream;
   bool _isStartingScreenShare = false;
+  bool _isMicEnabled = true; // tracks actual mic track state across stream refreshes
 
   static const _iceServers = {
     'iceServers': [
@@ -181,6 +182,16 @@ class WebRTCService {
             debugPrint('WebRTCService: Remote control revoked');
             isRemoteControlActive.value = false;
             remoteControlRequested.value = false;
+            break;
+          case 'screenShareStarted':
+            // Elder started screen share → caregiver updates its local state
+            debugPrint('WebRTCService: Remote peer started screen share');
+            isScreenSharing.value = true;
+            break;
+          case 'screenShareStopped':
+            // Elder stopped screen share → caregiver updates its local state
+            debugPrint('WebRTCService: Remote peer stopped screen share');
+            isScreenSharing.value = false;
             break;
         }
       } catch (e) {
@@ -331,6 +342,10 @@ class WebRTCService {
     for (final track in audioTracks) {
       track.enabled = !track.enabled;
     }
+    // Keep our internal mic tracker in sync
+    if (audioTracks.isNotEmpty) {
+      _isMicEnabled = audioTracks.first.enabled;
+    }
   }
 
   Future<void> toggleCamera() async {
@@ -413,6 +428,8 @@ class WebRTCService {
       localStream.value = s;
 
       isScreenSharing.value = true;
+      // Notify the remote peer (caregiver) that screen share started
+      _sendDataChannelMessage({'type': 'screenShareStarted'});
       debugPrint('WebRTCService: Screen share started');
 
       // If user stops share via the OS system UI, auto-restore camera
@@ -427,6 +444,11 @@ class WebRTCService {
 
   Future<void> _stopScreenShare() async {
     try {
+      // Auto-revoke remote control when screen share ends
+      if (isRemoteControlActive.value) {
+        revokeRemoteControl();
+      }
+
       // Stop the keep-alive foreground service now that screen share is ending.
       if (FlutterBackground.isBackgroundExecutionEnabled) {
         await FlutterBackground.disableBackgroundExecution();
@@ -448,6 +470,11 @@ class WebRTCService {
 
       final cameraTrack = freshStream.getVideoTracks().first;
 
+      // Restore the mic enabled state from before screen share
+      // (getUserMedia always creates tracks with enabled=true)
+      final freshAudio = freshStream.getAudioTracks().first;
+      freshAudio.enabled = _isMicEnabled;
+
       // Replace the video sender's track in the peer connection
       if (_pc != null) {
         final senders = await _pc!.getSenders();
@@ -458,7 +485,6 @@ class WebRTCService {
           }
         }
         // Also replace the audio sender so toggleMic works on the new tracks
-        final freshAudio = freshStream.getAudioTracks().first;
         for (final sender in senders) {
           if (sender.track?.kind == 'audio') {
             await sender.replaceTrack(freshAudio);
@@ -472,6 +498,9 @@ class WebRTCService {
 
       // Set the brand new stream — new object reference forces renderer refresh
       localStream.value = freshStream;
+
+      // Notify the remote peer (caregiver) that screen share stopped
+      _sendDataChannelMessage({'type': 'screenShareStopped'});
 
       debugPrint('WebRTCService: Screen share stopped, camera restored');
     } catch (e) {

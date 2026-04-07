@@ -18,6 +18,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Required for the floating revoke button overlay -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <application
         android:label="remote_assist"
         android:name="${applicationName}"
@@ -63,6 +66,7 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
+
         <!-- Accessibility Service for remote control (caregiver injects taps) -->
         <service
             android:name=".RemoteControlService"
@@ -76,6 +80,11 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
+        <!-- Floating revoke button overlay service -->
+        <service
+            android:name=".FloatingButtonService"
+            android:enabled="true"
+            android:exported="false" />
 
     </application>
 

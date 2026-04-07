@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../services/webrtc_service.dart';
@@ -41,11 +42,25 @@ class _CallScreenState extends State<CallScreen> {
   Offset? _swipeEndPosition;
   DateTime? _swipeStartTime;
 
+  // ─── PiP drag-to-corner state ────────────────────────────────────────────
+  static const double _pipWidth = 100;
+  static const double _pipHeight = 140;
+  static const double _pipMargin = 16;
+  Offset? _pipOffset; // current position (null = use default corner)
+  bool _isDraggingPip = false;
+
   @override
   void initState() {
     super.initState();
     _initRenderers();
     _startControlsTimer();
+
+    // Register the floating button callback (elder only).
+    // When the elder taps the floating overlay button, revoke remote control.
+    if (_isElder) {
+      RemoteControlService.init();
+      RemoteControlService.onFloatingButtonClicked = _onFloatingButtonClicked;
+    }
 
     widget.webrtcService.status.addListener(_onStatusChanged);
     widget.webrtcService.localStream.addListener(_onLocalStreamChanged);
@@ -69,7 +84,15 @@ class _CallScreenState extends State<CallScreen> {
   void _onLocalStreamChanged() {
     final stream = widget.webrtcService.localStream.value;
     if (mounted) {
-      setState(() => _localRenderer.srcObject = stream);
+      setState(() {
+        _localRenderer.srcObject = stream;
+        // Sync mic button with actual audio track state
+        // (prevents inversion after screen share creates a fresh stream)
+        final audioTracks = stream?.getAudioTracks() ?? [];
+        if (audioTracks.isNotEmpty) {
+          _isMicOn = audioTracks.first.enabled;
+        }
+      });
     }
   }
 
@@ -93,7 +116,17 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   void _onRemoteControlChanged() {
-    if (mounted) setState(() => _isRemoteControlActive = widget.webrtcService.isRemoteControlActive.value);
+    final active = widget.webrtcService.isRemoteControlActive.value;
+    if (mounted) setState(() => _isRemoteControlActive = active);
+
+    // Elder: show/hide the floating overlay revoke button
+    if (_isElder) {
+      if (active) {
+        RemoteControlService.showFloatingButton();
+      } else {
+        RemoteControlService.hideFloatingButton();
+      }
+    }
   }
 
   void _onControlRequested() {
@@ -145,6 +178,22 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
+  /// Called when the elder taps the floating overlay revoke button.
+  /// Works system-wide — the button is visible on top of all apps.
+  void _onFloatingButtonClicked() {
+    if (!_isRemoteControlActive) return;
+    widget.webrtcService.revokeRemoteControl();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Remote access revoked'),
+          backgroundColor: Colors.orange,
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   void _showGrantControlDialog() {
     showDialog(
       context: context,
@@ -153,7 +202,8 @@ class _CallScreenState extends State<CallScreen> {
         title: const Text('Remote Control Request'),
         content: const Text(
           'The caregiver wants to control your screen.\n\n'
-          'They will be able to tap, swipe, and long press on your screen remotely.',
+          'They will be able to tap, swipe, and long press on your screen remotely.\n\n'
+          'A floating button will appear — tap it anytime to revoke access.',
         ),
         actions: [
           TextButton(
@@ -296,9 +346,50 @@ class _CallScreenState extends State<CallScreen> {
     }
   }
 
+  // ─── PiP snap-to-corner logic ────────────────────────────────────────────
+
+  /// Computes the default bottom-right position for the PiP window.
+  Offset _defaultPipOffset(Size screenSize) {
+    return Offset(
+      screenSize.width - _pipWidth - _pipMargin,
+      screenSize.height - _pipHeight - 160,
+    );
+  }
+
+  /// Returns the nearest corner position for the PiP window.
+  Offset _snapToCorner(Offset current, Size screenSize) {
+    final double safeTop = MediaQuery.of(context).padding.top + _pipMargin;
+    final double safeBottom = screenSize.height - _pipHeight - _pipMargin;
+    final double left = _pipMargin;
+    final double right = screenSize.width - _pipWidth - _pipMargin;
+
+    final corners = [
+      Offset(left, safeTop),          // top-left
+      Offset(right, safeTop),         // top-right
+      Offset(left, safeBottom),       // bottom-left
+      Offset(right, safeBottom),      // bottom-right
+    ];
+
+    Offset nearest = corners.first;
+    double minDist = double.infinity;
+    for (final corner in corners) {
+      final dist = (corner - current).distance;
+      if (dist < minDist) {
+        minDist = dist;
+        nearest = corner;
+      }
+    }
+    return nearest;
+  }
+
   @override
   void dispose() {
     _controlsTimer?.cancel();
+    // Clean up floating button overlay
+    if (_isElder) {
+      RemoteControlService.hideFloatingButton();
+      RemoteControlService.onFloatingButtonClicked = null;
+    }
     widget.webrtcService.status.removeListener(_onStatusChanged);
     widget.webrtcService.localStream.removeListener(_onLocalStreamChanged);
     widget.webrtcService.remoteStream.removeListener(_onRemoteStreamChanged);
@@ -321,6 +412,7 @@ class _CallScreenState extends State<CallScreen> {
   @override
   Widget build(BuildContext context) {
     final status = widget.webrtcService.status.value;
+    final screenSize = MediaQuery.of(context).size;
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -334,64 +426,8 @@ class _CallScreenState extends State<CallScreen> {
                 ? _buildRemoteVideoView()
                 : _buildWaitingOverlay(status),
 
-            // ── Local PiP (bottom-right) ────────────────────────────────────
-            Positioned(
-              bottom: 160,
-              right: 16,
-              width: 100,
-              height: 140,
-              child: GestureDetector(
-                // Tap PiP to switch camera (quick shortcut)
-                onTap: _isElder && !_isScreenSharing ? _switchCamera : null,
-                child: Stack(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: _localRenderer.srcObject != null
-                          ? RTCVideoView(
-                              _localRenderer,
-                              mirror: !_isScreenSharing,
-                              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                            )
-                          : Container(
-                              color: Colors.grey.shade900,
-                              child: const Icon(Icons.videocam_off, color: Colors.white54),
-                            ),
-                    ),
-                    // Camera flip hint overlay on PiP
-                    if (_isElder && !_isScreenSharing)
-                      Positioned(
-                        bottom: 4,
-                        right: 4,
-                        child: Container(
-                          padding: const EdgeInsets.all(3),
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: const Icon(Icons.flip_camera_ios,
-                              color: Colors.white70, size: 14),
-                        ),
-                      ),
-                    // Screen share indicator on PiP
-                    if (_isScreenSharing)
-                      Positioned(
-                        bottom: 4,
-                        left: 4,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: Colors.blue.withAlpha(200),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: const Text('Screen',
-                              style: TextStyle(color: Colors.white, fontSize: 9)),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
+            // ── Draggable Local PiP ────────────────────────────────────────
+            _buildDraggablePip(screenSize),
 
             // ── Status badge ────────────────────────────────────────────────
             Positioned(
@@ -407,8 +443,8 @@ class _CallScreenState extends State<CallScreen> {
               ),
             ),
 
-            // ── Screen share active banner (elder) ──────────────────────────
-            if (_isScreenSharing)
+            // ── Screen share active banner (elder only) ─────────────────────
+            if (_isScreenSharing && _isElder)
               Positioned(
                 top: MediaQuery.of(context).padding.top + 60,
                 left: 24,
@@ -434,70 +470,6 @@ class _CallScreenState extends State<CallScreen> {
                 ),
               ),
 
-            // ── Remote control active banner (elder) ─────────────────────
-            if (_isRemoteControlActive && _isElder)
-              Positioned(
-                top: MediaQuery.of(context).padding.top + (_isScreenSharing ? 100 : 60),
-                left: 24,
-                right: 24,
-                child: GestureDetector(
-                  onTap: () {
-                    widget.webrtcService.revokeRemoteControl();
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.shade800.withAlpha(230),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.touch_app, color: Colors.white, size: 16),
-                        SizedBox(width: 8),
-                        Text(
-                          'Caregiver is controlling • Tap to revoke',
-                          style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-
-            // ── Remote control active banner (caregiver) ─────────────────
-            if (_isRemoteControlActive && !_isElder)
-              Positioned(
-                top: MediaQuery.of(context).padding.top + 60,
-                left: 24,
-                right: 24,
-                child: GestureDetector(
-                  onTap: () {
-                    widget.webrtcService.revokeRemoteControl();
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: Colors.green.shade700.withAlpha(230),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.touch_app, color: Colors.white, size: 16),
-                        SizedBox(width: 8),
-                        Text(
-                          'Controlling • Tap, swipe or hold • Tap here to stop',
-                          style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-
             // ── Controls overlay ────────────────────────────────────────────
             AnimatedPositioned(
               duration: const Duration(milliseconds: 300),
@@ -507,6 +479,87 @@ class _CallScreenState extends State<CallScreen> {
               right: 0,
               child: _buildControls(),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Builds the draggable PiP widget that snaps to the nearest corner on release.
+  Widget _buildDraggablePip(Size screenSize) {
+    final offset = _pipOffset ?? _defaultPipOffset(screenSize);
+
+    return AnimatedPositioned(
+      duration: _isDraggingPip ? Duration.zero : const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+      left: offset.dx,
+      top: offset.dy,
+      width: _pipWidth,
+      height: _pipHeight,
+      child: GestureDetector(
+        // Tap PiP to switch camera (quick shortcut)
+        onTap: _isElder && !_isScreenSharing ? _switchCamera : null,
+        onPanStart: (_) => setState(() => _isDraggingPip = true),
+        onPanUpdate: (details) {
+          setState(() {
+            final current = _pipOffset ?? _defaultPipOffset(screenSize);
+            _pipOffset = Offset(
+              (current.dx + details.delta.dx).clamp(0, screenSize.width - _pipWidth),
+              (current.dy + details.delta.dy).clamp(0, screenSize.height - _pipHeight),
+            );
+          });
+        },
+        onPanEnd: (_) {
+          setState(() {
+            _isDraggingPip = false;
+            _pipOffset = _snapToCorner(_pipOffset ?? _defaultPipOffset(screenSize), screenSize);
+          });
+        },
+        child: Stack(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: _localRenderer.srcObject != null
+                  ? RTCVideoView(
+                      _localRenderer,
+                      mirror: !_isScreenSharing,
+                      objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                    )
+                  : Container(
+                      color: Colors.grey.shade900,
+                      child: const Icon(Icons.videocam_off, color: Colors.white54),
+                    ),
+            ),
+            // Camera flip hint overlay on PiP
+            if (_isElder && !_isScreenSharing)
+              Positioned(
+                bottom: 4,
+                right: 4,
+                child: Container(
+                  padding: const EdgeInsets.all(3),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Icon(Icons.flip_camera_ios,
+                      color: Colors.white70, size: 14),
+                ),
+              ),
+            // Screen share indicator on PiP
+            if (_isScreenSharing)
+              Positioned(
+                bottom: 4,
+                left: 4,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.withAlpha(200),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text('Screen',
+                      style: TextStyle(color: Colors.white, fontSize: 9)),
+                ),
+              ),
           ],
         ),
       ),
@@ -538,8 +591,6 @@ class _CallScreenState extends State<CallScreen> {
               debugPrint('Remote tap: ($normX, $normY)');
             },
             // ── Long press detection ──────────────────────────────────
-            // Finger held → start hold on elder's device immediately.
-            // Finger released → cancel the ongoing hold.
             onLongPressStart: (details) {
               final normX =
                   (details.localPosition.dx / constraints.maxWidth).clamp(0.0, 1.0);
@@ -639,6 +690,9 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Widget _buildControls() {
+    // The caregiver sees the elder's screen share state via the data channel
+    final elderIsScreenSharing = widget.webrtcService.isScreenSharing.value;
+
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20),
       padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
@@ -678,6 +732,7 @@ class _CallScreenState extends State<CallScreen> {
               ),
             ),
           // ── Caregiver secondary row (remote control button) ────────────
+          // Only show when the remote video is present
           if (!_isElder && _remoteRenderer.srcObject != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
@@ -686,14 +741,29 @@ class _CallScreenState extends State<CallScreen> {
                 children: [
                   _ControlButton(
                     icon: _isRemoteControlActive ? Icons.cancel : Icons.touch_app,
-                    color: _isRemoteControlActive ? Colors.orange : Colors.white,
-                    backgroundColor: _isRemoteControlActive ? Colors.orange.shade900.withAlpha(180) : null,
-                    label: _isRemoteControlActive ? 'Stop Control' : 'Request Control',
+                    color: _isRemoteControlActive
+                        ? Colors.orange
+                        : (elderIsScreenSharing ? Colors.white : Colors.white30),
+                    backgroundColor: _isRemoteControlActive
+                        ? Colors.orange.shade900.withAlpha(180)
+                        : null,
+                    label: _isRemoteControlActive
+                        ? 'Stop Control'
+                        : (elderIsScreenSharing ? 'Request Control' : 'Need Screen Share'),
                     onTap: () {
                       if (_isRemoteControlActive) {
                         widget.webrtcService.revokeRemoteControl();
-                      } else {
+                      } else if (elderIsScreenSharing) {
                         widget.webrtcService.requestRemoteControl();
+                      } else {
+                        // Screen share not active — show a hint
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('The elder must share their screen before you can request control.'),
+                            backgroundColor: Colors.orange,
+                            duration: Duration(seconds: 3),
+                          ),
+                        );
                       }
                     },
                     size: 44,
